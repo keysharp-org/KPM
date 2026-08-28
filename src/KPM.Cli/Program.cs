@@ -83,20 +83,24 @@ static async Task<int> Add(CommandLine cli)
 
 	var project = await Project.LoadAsync(ProjectRoot(cli));
 	var service = new KpmService();
+	var context = Context(cli);
+	// Fetched once, and honouring --offline: resolving each argument separately used to refetch,
+	// which both ignored the flag and let a network fetch overwrite the cache mid-command.
+	var index = (await service.GetIndexAsync(refresh: !cli.Has("offline"))).Index;
 
 	foreach (var request in cli.Positionals)
 	{
 		var at = request.LastIndexOf('@');
 		var idText = at > 0 ? request[..at] : request;
 		var range = at > 0 ? request[(at + 1)..] : null;
-		var id = await ResolveIdAsync(service, idText);
+		var id = ResolveId(index, idText, context.Engine);
 
 		if (id is null)
 			return 1;
 
 		// Without an explicit range, pin the caret range of whatever is newest now: a bare add
 		// should not mean "always newest", which would change what a project builds over time.
-		range ??= await CaretRangeForLatest(service, id.Value, Context(cli));
+		range ??= CaretRangeForLatest(index, id.Value, context);
 		project.SetDependency(id.Value, range);
 		Console.WriteLine($"added {id} {range}");
 	}
@@ -110,13 +114,11 @@ static async Task<int> Add(CommandLine cli)
 /// has it, and reported with the candidates when several do; a full id is matched regardless of
 /// casing, and the registry's own spelling is what gets written to kpm.json.
 /// </summary>
-static async Task<PackageId?> ResolveIdAsync(KpmService service, string text)
+static PackageId? ResolveId(RegistryIndex index, string text, string engine)
 {
-	var index = (await service.GetIndexAsync()).Index;
-
 	if (!text.Contains('/'))
 	{
-		var byName = index.FindByName(text);
+		var byName = index.FindByName(text, engine);
 
 		if (byName is null)
 		{
@@ -145,14 +147,15 @@ static async Task<PackageId?> ResolveIdAsync(KpmService service, string text)
 	return PackageId.Parse($"{found.Package.Owner}/{found.Package.Name}");
 }
 
-static async Task<string> CaretRangeForLatest(KpmService service, PackageId id, ResolveContext context)
+static string CaretRangeForLatest(RegistryIndex index, PackageId id, ResolveContext context)
 {
-	var index = (await service.GetIndexAsync()).Index;
 	var package = index.Find(id) ?? throw new InvalidOperationException($"no package '{id}' in the registry");
 	var newest = package.Installable()
 				 .Where(v => v.Engines.ContainsKey(context.Engine))
 				 .MaxBy(v => v.Release)
-				 ?? throw new InvalidOperationException($"'{id}' has no release for {context.Engine}");
+				 ?? throw new InvalidOperationException(
+						$"'{id}' has no release for {context.Engine}"
+						+ Resolver.DescribePorts(index.PortsOf(id, context.Engine), context.Engine));
 	return $"^{newest.Version}";
 }
 

@@ -115,9 +115,12 @@ public sealed class Resolver(RegistryIndex index)
 		var forEngine = matching.Where(v => SupportsEngine(v, context)).ToList();
 
 		if (forEngine.Count == 0)
+		{
 			throw new ResolutionException(
 				$"no release of '{id}' matching {Describe(requirements)} supports {context.Engine} {context.EngineVersion}\n"
-				+ $"  candidates declare: {string.Join(", ", matching.Select(EngineSummary).Distinct())}");
+				+ $"  candidates declare: {string.Join(", ", matching.Select(EngineSummary).Distinct())}"
+				+ SuggestPort(id, context));
+		}
 
 		var forPlatform = forEngine.Where(v => Platforms.Select(v.Artifacts.Keys, context.Platform) is not null).ToList();
 
@@ -140,6 +143,25 @@ public sealed class Resolver(RegistryIndex index)
 		version.Engines.TryGetValue(context.Engine, out var rangeText)
 		&& EngineRange.TryParse(rangeText, out var range, out _)
 		&& range.Includes(context.EngineVersion);
+
+	/// <summary>
+	/// Names a port of this package that does support the engine being resolved for.
+	///
+	/// A port is a separate package because it versions and releases independently of the original,
+	/// but a user asking for the original on the wrong engine is asking for the library, not the
+	/// packaging. <c>derivedFrom</c> already records the relationship, so the answer is knowable
+	/// rather than something the user has to go looking for.
+	/// </summary>
+	private string SuggestPort(PackageId id, ResolveContext context) =>
+		DescribePorts(index.PortsOf(id, context.Engine), context.Engine);
+
+	/// <summary>Formats a port suggestion, shared by every path that turns a user away on engine.</summary>
+	public static string DescribePorts(IReadOnlyList<PackageId> ports, string engine) =>
+		ports.Count == 0
+		? ""
+		: $"\n  {string.Join(" and ", ports)} "
+		  + $"{(ports.Count == 1 ? "is a port of it that supports" : "are ports of it that support")} "
+		  + $"{engine}; install that instead.";
 
 	private static string EngineSummary(VersionManifest v) =>
 		v.Engines.Count == 0 ? "no engine" : string.Join(" ", v.Engines.Select(e => $"{e.Key} {e.Value}"));

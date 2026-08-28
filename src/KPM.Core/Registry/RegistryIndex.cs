@@ -49,25 +49,71 @@ public sealed class RegistryIndex
 	}
 
 	/// <summary>
-	/// Resolves a bare package name, for the convenience form <c>kpm add findtext</c>. Returns null
-	/// when nothing matches and throws when several do: guessing between two packages that share a
-	/// name is exactly the mistake a namespaced registry exists to prevent.
+	/// Resolves a bare package name, for the convenience form <c>kpm add FindText</c>.
+	///
+	/// Candidates are narrowed to those the given engine can actually install before ambiguity is
+	/// considered, which is what makes the short form usable in practice: a library and a port of it
+	/// share a name but never an engine, so each engine sees exactly one. Only a genuine clash —
+	/// two packages this user could install, both called <c>FindText</c> — is reported, because
+	/// guessing between those is the mistake a namespaced registry exists to prevent.
 	/// </summary>
-	public IndexedPackage? FindByName(string name)
+	public IndexedPackage? FindByName(string name, string? engine = null)
 	{
 		var matches = Packages
 					  .Where(p => string.Equals(p.Package.Name, name, StringComparison.OrdinalIgnoreCase))
 					  .ToList();
 
+		if (matches.Count > 1 && engine is not null)
+		{
+			var installable = matches
+							  .Where(p => p.Installable().Any(v => v.Engines.ContainsKey(engine)))
+							  .ToList();
+
+			// Only narrow when something survives: with nothing installable the caller should see
+			// every candidate, so its error can say what exists and which engines they need.
+			if (installable.Count > 0)
+				matches = installable;
+		}
+
 		if (matches.Count > 1)
 		{
-			var candidates = matches.Select(m => $"{m.Package.Owner}/{m.Package.Name}").OrderBy(c => c, StringComparer.Ordinal);
+			// What survives the engine filter is a real choice between things this user could
+			// install — typically a library and a port of it, differing in platform reach and in
+			// how battle-tested they are. Listing bare ids would make them look interchangeable, so
+			// show what actually distinguishes them and let the user decide.
+			var lines = matches
+						.OrderBy(m => $"{m.Package.Owner}/{m.Package.Name}", StringComparer.Ordinal)
+						.Select(m =>
+			{
+				var newest = m.Installable().MaxBy(v => v.Release);
+				var platforms = newest is null ? "" : $"   platforms: {string.Join(", ", newest.Platforms)}";
+				var derived = m.Package.DerivedFrom is { } from ? $"   (a port of {from})" : "";
+				return $"  {m.Package.Owner}/{m.Package.Name} {newest?.Version}{platforms}{derived}";
+			});
 			throw new InvalidOperationException(
-				$"'{name}' is ambiguous; name the owner: {string.Join(", ", candidates)}");
+				$"'{name}' matches more than one package{(engine is null ? "" : $" for {engine}")}:\n"
+				+ string.Join("\n", lines) + "\nName the one you want, owner included.");
 		}
 
 		return matches.Count == 1 ? matches[0] : null;
 	}
+
+	/// <summary>
+	/// Packages declaring themselves derived from <paramref name="id"/> that support
+	/// <paramref name="engine"/>.
+	///
+	/// A port is a separate package because it versions and releases independently of the original,
+	/// but someone asking for the original on the wrong engine is asking for the library, not the
+	/// packaging — so every path that turns them away should be able to name the alternative.
+	/// </summary>
+	public IReadOnlyList<PackageId> PortsOf(PackageId id, string engine) =>
+		Packages
+		.Where(p => p.Package.DerivedFrom is { } from
+					&& PackageId.TryParse(from, out var parsed, out _)
+					&& parsed.Value == id)
+		.Where(p => p.Installable().Any(v => v.Engines.ContainsKey(engine)))
+		.Select(p => PackageId.Parse($"{p.Package.Owner}/{p.Package.Name}"))
+		.ToList();
 
 	/// <summary>Every package whose id or description mentions <paramref name="text"/>.</summary>
 	public IEnumerable<IndexedPackage> Search(string text)

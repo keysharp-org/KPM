@@ -156,6 +156,58 @@ public sealed class ResolverTests
 		Assert.That(error!.Message, Does.Contain("keysharp"));
 	}
 
+	/// <summary>
+	/// A library and a port of it share a name but never an engine, so the short form is
+	/// unambiguous to any actual user — only a lookup that ignores which engine they are on sees a
+	/// clash. This is what keeps `kpm add FindText` working once a port exists.
+	/// </summary>
+	[Test]
+	public void ABareNameResolvesPerEngineWhenALibraryAndItsPortShareIt()
+	{
+		var original = Release("feiyue/FindText", "10.2.0", engine: null);
+		original.Engines["autohotkey"] = ">=2.0";
+		var index = Index(original, Release("Keysharp/FindText", "0.1.0"));
+		Assert.That(index.FindByName("FindText", Engines.Keysharp)!.Package.Owner, Is.EqualTo("Keysharp"));
+		Assert.That(index.FindByName("FindText", Engines.AutoHotkey)!.Package.Owner, Is.EqualTo("feiyue"));
+		// Ignoring the engine, they really are ambiguous — which is why the engine has to be passed.
+		Assert.Throws<InvalidOperationException>(() => index.FindByName("FindText"));
+	}
+
+	/// <summary>Two packages the same user could install is a real clash, and still reported.</summary>
+	[Test]
+	public void ABareNameIsStillAmbiguousBetweenTwoPackagesForTheSameEngine()
+	{
+		var index = Index(Release("a/Json", "1.0.0"), Release("b/Json", "1.0.0"));
+		var error = Assert.Throws<InvalidOperationException>(() => index.FindByName("Json", Engines.Keysharp));
+		Assert.That(error!.Message, Does.Contain("a/Json").And.Contain("b/Json").And.Contain("matches more than one"));
+	}
+
+	/// <summary>
+	/// A user asking for the original on an engine it does not support is asking for the library,
+	/// not the packaging — so the port that does support them is named rather than left to be found.
+	/// </summary>
+	[Test]
+	public void APortIsSuggestedWhenTheOriginalDoesNotSupportTheEngine()
+	{
+		var original = Release("feiyue/FindText", "10.2.0", engine: null);
+		original.Engines["autohotkey"] = ">=2.0";
+		var index = Index(original, Release("Keysharp/FindText", "0.1.0"));
+		index.Packages.Single(p => p.Package.Owner == "Keysharp").Package.DerivedFrom = "feiyue/FindText";
+		var error = Assert.Throws<ResolutionException>(() => new Resolver(index).Resolve(
+						new Dictionary<string, string> { ["feiyue/FindText"] = "^10.0" }, Context()));
+		Assert.That(error!.Message, Does.Contain("Keysharp/FindText").And.Contain("port"));
+	}
+
+	[Test]
+	public void NoPortIsSuggestedWhenNoneSupportsTheEngineEither()
+	{
+		var original = Release("feiyue/FindText", "10.2.0", engine: null);
+		original.Engines["autohotkey"] = ">=2.0";
+		var error = Assert.Throws<ResolutionException>(() => new Resolver(Index(original)).Resolve(
+						new Dictionary<string, string> { ["feiyue/FindText"] = "^10.0" }, Context()));
+		Assert.That(error!.Message, Does.Not.Contain("install that instead"));
+	}
+
 	[Test]
 	public void AnEngineVersionBelowTheRequirementIsExcluded()
 	{
