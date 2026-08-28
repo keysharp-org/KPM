@@ -15,6 +15,54 @@ namespace Kpm.Bot;
 /// </summary>
 public sealed class Publisher(string repository, bool dryRun = false)
 {
+	/// <summary>
+	/// Publishing is paced against GitHub's *secondary* rate limits, which are what a bulk publish
+	/// actually hits — the 5,000/hour primary limit is never the constraint here. Content-generating
+	/// requests (anything that creates something) are capped at 80 per minute and 500 per hour, and
+	/// each release costs two: one to create it, one to upload its asset. Without pacing a large
+	/// publish dies partway through with a 403 that looks nothing like a rate limit.
+	/// </summary>
+	private const int ContentRequestsPerHour = 500;
+
+	private const int ContentRequestsPerMinute = 80;
+
+	private readonly Queue<DateTimeOffset> contentRequests = new();
+
+	/// <summary>Waits, if needed, until another content-generating request would be within both windows.</summary>
+	private async Task ThrottleAsync(int cost, IProgress<string>? progress, CancellationToken ct)
+	{
+		while (true)
+		{
+			var now = DateTimeOffset.UtcNow;
+
+			while (contentRequests.Count > 0 && now - contentRequests.Peek() > TimeSpan.FromHours(1))
+				_ = contentRequests.Dequeue();
+
+			var inLastMinute = contentRequests.Count(t => now - t < TimeSpan.FromMinutes(1));
+			var wait = TimeSpan.Zero;
+
+			if (contentRequests.Count + cost > ContentRequestsPerHour)
+				wait = TimeSpan.FromHours(1) - (now - contentRequests.Peek()) + TimeSpan.FromSeconds(1);
+			else if (inLastMinute + cost > ContentRequestsPerMinute)
+			{
+				var oldestInMinute = contentRequests.First(t => now - t < TimeSpan.FromMinutes(1));
+				wait = TimeSpan.FromMinutes(1) - (now - oldestInMinute) + TimeSpan.FromSeconds(1);
+			}
+
+			if (wait <= TimeSpan.Zero)
+			{
+				for (var i = 0; i < cost; i++)
+					contentRequests.Enqueue(now);
+
+				return;
+			}
+
+			progress?.Report($"… rate limit: waiting {wait.TotalMinutes:F1} min "
+							 + $"({contentRequests.Count}/{ContentRequestsPerHour} this hour)");
+			await Task.Delay(wait, ct);
+		}
+	}
+
 	public async Task<int> PublishAsync(string registryRoot, string artifactRoot, IProgress<string>? progress = null,
 										CancellationToken ct = default)
 	{
@@ -61,6 +109,8 @@ public sealed class Publisher(string repository, bool dryRun = false)
 					"--title", $"{package.Id} {release}", "--notes", notes
 				};
 				arguments.AddRange(files);
+				// Creating the release is one content-generating request; each asset upload is another.
+				await ThrottleAsync(1 + files.Count, progress, ct);
 
 				if (await RunAsync("gh", arguments, ct) != 0)
 					throw new InvalidOperationException($"failed to publish {tag}");
