@@ -103,19 +103,14 @@ public sealed class PackerTests
 	}
 
 	[Test]
-	public void NativePayloadsFollowThePlatformBeingBuilt()
+	public void SharedContentReachesEveryArtifact()
 	{
 		var directory = MakePackage();
-		_ = Directory.CreateDirectory(Path.Combine(directory, "native", "win-x64"));
-		_ = Directory.CreateDirectory(Path.Combine(directory, "native", "linux-x64"));
-		File.WriteAllText(Path.Combine(directory, "native", "win-x64", "demo.dll"), "windows");
-		File.WriteAllText(Path.Combine(directory, "native", "linux-x64", "demo.so"), "linux");
-		var windows = Packer.Pack(directory, Manifest(), "win-x64");
-		Assert.That(windows.Paths, Does.Contain("native/win-x64/demo.dll"));
-		Assert.That(windows.Paths, Has.None.EqualTo("native/linux-x64/demo.so"));
-		// The portable build carries no native payload at all, not the host's.
-		var any = Packer.Pack(directory, Manifest(), Platforms.Any);
-		Assert.That(any.Paths, Has.None.StartWith("native/"));
+		_ = Directory.CreateDirectory(Path.Combine(directory, "native"));
+		File.WriteAllText(Path.Combine(directory, "native", "portable.dll"), "managed");
+		// A top-level native/ is rare but meaningful: a payload that is the same everywhere.
+		foreach (var platform in (string[])[Platforms.Any, "win-x64", "linux-x64"])
+			Assert.That(Packer.Pack(directory, Manifest(), platform).Paths, Does.Contain("native/portable.dll"));
 	}
 
 	/// <summary>
@@ -123,21 +118,26 @@ public sealed class PackerTests
 	/// plain, portable script — as opposed to compile-time platform branches, which AutoHotkey
 	/// rejects outright, so a package using them could never claim both engines.
 	/// </summary>
+	private static void WritePlatformFile(string directory, string platform, string kind, string name, string text)
+	{
+		var target = Path.Combine(directory, "platform", platform, kind);
+		_ = Directory.CreateDirectory(target);
+		File.WriteAllText(Path.Combine(target, name), text);
+	}
+
 	[Test]
 	public void PlatformSpecificSourceLandsInThatPlatformsArtifactOnly()
 	{
 		var directory = MakePackage();
-		_ = Directory.CreateDirectory(Path.Combine(directory, "platform", "linux-x64"));
-		_ = Directory.CreateDirectory(Path.Combine(directory, "platform", "any"));
-		File.WriteAllText(Path.Combine(directory, "platform", "any", "Engine.ks"), "; windows\n");
-		File.WriteAllText(Path.Combine(directory, "platform", "linux-x64", "Engine.ks"), "; linux\n");
+		WritePlatformFile(directory, Platforms.Any, "src", "Engine.ks", "; windows\n");
+		WritePlatformFile(directory, "linux-x64", "src", "Engine.ks", "; linux\n");
 		var linux = Packer.Pack(directory, Manifest(), "linux-x64");
 		var portable = Packer.Pack(directory, Manifest(), Platforms.Any);
 
-		// Platform-specific files land inside src/, so a consumer's include never varies by platform.
+		// Platform-specific files land in src/, so a consumer's include never varies by platform.
 		Assert.That(ReadEntry(linux, "src/Engine.ks"), Is.EqualTo("; linux\n"));
 		Assert.That(ReadEntry(portable, "src/Engine.ks"), Is.EqualTo("; windows\n"));
-		// One platform's code never reaches another's artifact, and nothing leaks the layout.
+		// One platform's code never reaches another's artifact, and the rid never leaks into it.
 		Assert.That(linux.Paths, Has.None.Contain("platform/"));
 		Assert.That(linux.Bytes, Is.Not.EqualTo(portable.Bytes).AsCollection);
 		// Shared files are identical everywhere.
@@ -145,21 +145,58 @@ public sealed class PackerTests
 	}
 
 	/// <summary>
-	/// The rule that keeps the layout honest: if src/ could be silently shadowed, a reader looking
-	/// at src/Engine.ks would have no way to tell it is replaced on Linux.
+	/// The rid selects the artifact but never appears inside it, so a script loads its library by
+	/// the same path everywhere instead of having to work out which rid it is running as.
 	/// </summary>
 	[Test]
-	public void AFileCannotBeProvidedByBothSharedAndPlatformSpecificSource()
+	public void NativePayloadsAreAddressedWithoutTheirPlatform()
 	{
 		var directory = MakePackage();
-		_ = Directory.CreateDirectory(Path.Combine(directory, "platform", "linux-x64"));
+		WritePlatformFile(directory, "win-x64", "native", "demo.dll", "windows");
+		WritePlatformFile(directory, "linux-x64", "native", "demo.so", "linux");
+		var windows = Packer.Pack(directory, Manifest(), "win-x64");
+		var linux = Packer.Pack(directory, Manifest(), "linux-x64");
+		Assert.That(windows.Paths, Does.Contain("native/demo.dll"));
+		Assert.That(linux.Paths, Does.Contain("native/demo.so"));
+		Assert.That(windows.Paths, Has.None.EqualTo("native/demo.so"));
+		Assert.That(windows.Paths, Has.None.Contain("win-x64"));
+		// The portable build carries no native payload at all, not the host's.
+		Assert.That(Packer.Pack(directory, Manifest(), Platforms.Any).Paths, Has.None.StartWith("native/"));
+	}
+
+	/// <summary>
+	/// The rule that keeps the layout honest: if the shared tree could be silently shadowed, a
+	/// reader looking at src/Engine.ks would have no way to tell it is replaced on Linux.
+	/// </summary>
+	[Test]
+	public void AFileCannotBeProvidedByBothSharedAndPlatformSpecificContent()
+	{
+		var directory = MakePackage();
 		File.WriteAllText(Path.Combine(directory, "src", "Engine.ks"), "; shared\n");
-		File.WriteAllText(Path.Combine(directory, "platform", "linux-x64", "Engine.ks"), "; linux\n");
+		WritePlatformFile(directory, "linux-x64", "src", "Engine.ks", "; linux\n");
 		var error = Assert.Throws<InvalidOperationException>(
 						() => Packer.Pack(directory, Manifest(), "linux-x64"));
-		Assert.That(error!.Message, Does.Contain("src/Engine.ks").And.Contain("platform/linux-x64"));
+		Assert.That(error!.Message, Does.Contain("src/Engine.ks").And.Contain("platform/linux-x64/src/Engine.ks"));
 		// The unaffected platform still packs: the clash only exists where both would apply.
 		Assert.DoesNotThrow(() => Packer.Pack(directory, Manifest(), "win-x64"));
+	}
+
+	/// <summary>
+	/// Reserved names live at the top of a package, never inside src/, so they cannot collide with a
+	/// package's own source. thqby/Native really does ship a src/Native/ directory, and on a
+	/// case-insensitive filesystem a reserved src/native/ would have been the same name.
+	/// </summary>
+	[Test]
+	public void APackageMayHaveItsOwnSourceDirectoriesNamedLikeReservedOnes()
+	{
+		var directory = MakePackage();
+		_ = Directory.CreateDirectory(Path.Combine(directory, "src", "Native"));
+		_ = Directory.CreateDirectory(Path.Combine(directory, "src", "platform"));
+		File.WriteAllText(Path.Combine(directory, "src", "Native", "Native.ks"), "; the package's own\n");
+		File.WriteAllText(Path.Combine(directory, "src", "platform", "Detect.ks"), "; also the package's own\n");
+		var result = Packer.Pack(directory, Manifest(), "linux-x64");
+		Assert.That(result.Paths, Does.Contain("src/Native/Native.ks"));
+		Assert.That(result.Paths, Does.Contain("src/platform/Detect.ks"));
 	}
 
 	[Test]

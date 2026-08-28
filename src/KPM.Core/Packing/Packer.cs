@@ -59,8 +59,8 @@ public static class Packer
 			new("package.json", Encoding.UTF8.GetBytes(ManifestJson.Write(manifest)))
 		};
 
-		foreach (var (archivePath, absolute) in files)
-			entries.Add(new DeterministicZip.Entry(archivePath, File.ReadAllBytes(absolute)));
+		foreach (var (archivePath, source) in files)
+			entries.Add(new DeterministicZip.Entry(archivePath, File.ReadAllBytes(source.Absolute)));
 
 		// Sorting here rather than at each call site is what makes the archive independent of the
 		// order the filesystem happened to enumerate.
@@ -81,42 +81,33 @@ public static class Packer
 	}
 
 	/// <summary>
-	/// The files a package contributes to one platform's artifact: everything in <c>src/</c>, plus
-	/// this platform's own <c>platform/&lt;rid&gt;/</c> files, its top-level documents, and its
-	/// native payload.
+	/// The files a package contributes to one platform's artifact.
 	///
-	/// A file's location says exactly which artifacts contain it: <c>src/</c> means every one,
-	/// <c>platform/&lt;rid&gt;/</c> means that one only. The two may not both provide the same
-	/// archive path — that is an error rather than a silent win for either, because a reader
-	/// looking at <c>src/Engine.ahk</c> would otherwise have no way to tell it is replaced on Linux.
+	/// There is one rule: <c>src/</c> and <c>native/</c> at the top of a package go into every
+	/// artifact; the same two names under <c>platform/&lt;rid&gt;/</c> go into that artifact alone.
+	/// The rid is a repository-side selector and never appears in the archive, so a script refers to
+	/// <c>src/Engine.ahk</c> and <c>native/foo.dll</c> by the same path on every platform instead of
+	/// having to work out which rid it is running as.
+	///
+	/// Two sources may not provide the same archive path — that is an error rather than a silent win
+	/// for either, because a reader looking at <c>src/Engine.ahk</c> would otherwise have no way to
+	/// tell it is replaced on Linux.
+	///
+	/// Note that these names are reserved only at the *top* of a package directory, never inside
+	/// <c>src/</c>, so they cannot collide with a package's own source: <c>thqby/Native</c> really
+	/// does ship a <c>src/Native/</c> directory, and on a case-insensitive filesystem a reserved
+	/// <c>src/native/</c> would have been the same name.
 	///
 	/// This is how a package ships different code per platform while every file stays plain,
 	/// portable script. The alternative — one source with compile-time platform branches — is a
 	/// Keysharp-only construct that AutoHotkey rejects outright, so a package using it could never
 	/// claim both engines.
 	/// </summary>
-	private static Dictionary<string, string> Collect(string root, string platform)
+	private static Dictionary<string, SourceFile> Collect(string root, string platform)
 	{
-		var files = new Dictionary<string, string>(StringComparer.Ordinal);
-		var sourceDirectory = Path.Combine(root, "src");
-
-		if (Directory.Exists(sourceDirectory))
-			AddTree(sourceDirectory, "src/", files, "src");
-
-		// Placed inside src/ so a package's own includes and the manifest's entry path never vary by
-		// platform — only which artifact carries the file does.
-		var specific = Path.Combine(root, "platform", platform);
-
-		if (Directory.Exists(specific))
-			AddTree(specific, "src/", files, $"platform/{platform}");
-
-		if (platform != Platforms.Any)
-		{
-			var nativeDirectory = Path.Combine(root, "native", platform);
-
-			if (Directory.Exists(nativeDirectory))
-				AddTree(nativeDirectory, $"native/{platform}/", files, $"native/{platform}");
-		}
+		var files = new Dictionary<string, SourceFile>(StringComparer.Ordinal);
+		AddContent(root, "", files);
+		AddContent(Path.Combine(root, "platform", platform), $"platform/{platform}/", files);
 
 		foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.TopDirectoryOnly))
 		{
@@ -126,13 +117,25 @@ public static class Packer
 				continue;
 
 			if (documentPrefixes.Any(p => name.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
-				files[name] = file;
+				files[name] = new SourceFile(file, name);
 		}
 
 		return files;
 	}
 
-	private static void AddTree(string baseDirectory, string archivePrefix, Dictionary<string, string> into,
+	/// <summary>Adds the <c>src/</c> and <c>native/</c> trees of one content root, if present.</summary>
+	private static void AddContent(string contentRoot, string originPrefix, Dictionary<string, SourceFile> files)
+	{
+		foreach (var kind in (string[])["src", "native"])
+		{
+			var directory = Path.Combine(contentRoot, kind);
+
+			if (Directory.Exists(directory))
+				AddTree(directory, $"{kind}/", files, $"{originPrefix}{kind}");
+		}
+	}
+
+	private static void AddTree(string baseDirectory, string archivePrefix, Dictionary<string, SourceFile> into,
 								string origin)
 	{
 		foreach (var file in Directory.EnumerateFiles(baseDirectory, "*", SearchOption.AllDirectories))
@@ -152,20 +155,18 @@ public static class Packer
 			if (into.TryGetValue(archivePath, out var existing))
 			{
 				throw new InvalidOperationException(
-					$"'{archivePath}' is provided by both '{Describe(existing, baseDirectory, relative, origin)}' and "
-					+ $"'{origin}/{relative}'. A file belongs in src/ if every platform gets it, or in "
+					$"'{archivePath}' is provided by both '{existing.Origin}' and '{origin}/{relative}'. "
+					+ "A file belongs at the top of the package if every platform gets it, or under "
 					+ "platform/<rid>/ if only one does — never both, so that where a file lives says which "
 					+ "artifacts contain it.");
 			}
 
-			into[archivePath] = file;
+			into[archivePath] = new SourceFile(file, $"{origin}/{relative}");
 		}
 	}
 
-	private static string Describe(string existingPath, string baseDirectory, string relative, string origin) =>
-		existingPath.Replace('\\', '/').Contains("/src/", StringComparison.Ordinal) && origin != "src"
-		? $"src/{relative}"
-		: relative;
+	/// <summary>A file bound for the archive, with the repository path it came from for diagnostics.</summary>
+	private readonly record struct SourceFile(string Absolute, string Origin);
 
 	/// <summary>The platforms a package directory ships platform-specific source for.</summary>
 	public static IEnumerable<string> OverlayPlatforms(string packageDirectory)

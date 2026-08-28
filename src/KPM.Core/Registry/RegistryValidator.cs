@@ -226,16 +226,18 @@ public static class RegistryValidator
 		foreach (var problem in CheckLineEndings(package))
 			yield return problem;
 
-		// An overlay for a platform the package does not declare is never packed into anything, so
-		// the code would look present in the repository and be absent from every artifact.
-		foreach (var overlay in Packer.OverlayPlatforms(package.Directory))
+		// Content for a platform the package does not declare is never packed into anything, so it
+		// would look present in the repository and be absent from every artifact.
+		foreach (var specific in Packer.OverlayPlatforms(package.Directory))
 		{
-			if (!Platforms.IsValid(overlay))
-				yield return new ValidationProblem(where, $"platform/{overlay} is not a known platform");
-			else if (!port.Platforms.Contains(overlay))
+			if (!Platforms.IsValid(specific))
 				yield return new ValidationProblem(where,
-												   $"platform/{overlay} exists but '{overlay}' is not in platforms, "
-												   + "so that code would never be shipped");
+												   $"platform/{specific} is not a known platform; expected one of "
+												   + string.Join(", ", Platforms.All));
+			else if (!port.Platforms.Contains(specific))
+				yield return new ValidationProblem(where,
+												   $"platform/{specific} exists but '{specific}' is not in platforms, "
+												   + "so nothing there would ever be shipped");
 		}
 
 		foreach (var platform in port.Platforms)
