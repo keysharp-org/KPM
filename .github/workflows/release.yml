@@ -40,25 +40,35 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # Two builds, because there are two audiences. Someone downloading kpm on its own may have no
+      # .NET at all, so that build carries its own runtime (~73 MB). Keysharp ships
+      # framework-dependent and so already requires a runtime on the machine, and bundling a second
+      # copy would more than triple a 21 MB install — that build is 465 KB.
       - name: Publish
         run: |
-          # Debug symbols and the XML doc file are build outputs, not things a user downloads.
-          dotnet publish src/KPM.Cli/KPM.Cli.csproj \
-            -c Release -r "${{ matrix.rid }}" --self-contained true \
-            -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true \
-            -p:DebugType=none -p:GenerateDocumentationFile=false \
-            -p:Version="${GITHUB_REF_NAME#v}" \
-            -o "publish/${{ matrix.rid }}"
-          rm -f "publish/${{ matrix.rid }}"/*.pdb "publish/${{ matrix.rid }}"/*.xml
+          publish() {
+            # Debug symbols and the XML doc file are build outputs, not things a user downloads.
+            dotnet publish src/KPM.Cli/KPM.Cli.csproj \
+              -c Release -r "${{ matrix.rid }}" --self-contained "$1" \
+              -p:DebugType=none -p:GenerateDocumentationFile=false \
+              -p:Version="${GITHUB_REF_NAME#v}" ${3:-} -o "$2"
+            rm -f "$2"/*.pdb "$2"/*.xml
+          }
+          publish true  "publish/standalone" "-p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true"
+          publish false "publish/framework-dependent"
 
       - name: Archive
         run: |
           mkdir -p dist
-          cp README.md LICENSE "publish/${{ matrix.rid }}/" 2>/dev/null || true
-          case "${{ matrix.rid }}" in
-          win-*) (cd "publish/${{ matrix.rid }}" && zip -qr "../../dist/kpm-${GITHUB_REF_NAME}-${{ matrix.rid }}.zip" .) ;;
-          *)     tar -czf "dist/kpm-${GITHUB_REF_NAME}-${{ matrix.rid }}.tar.gz" -C "publish/${{ matrix.rid }}" . ;;
-          esac
+          archive() {
+            cp README.md LICENSE "$1/" 2>/dev/null || true
+            case "${{ matrix.rid }}" in
+            win-*) (cd "$1" && zip -qr "$OLDPWD/dist/$2.zip" .) ;;
+            *)     tar -czf "dist/$2.tar.gz" -C "$1" . ;;
+            esac
+          }
+          archive "publish/standalone" "kpm-${GITHUB_REF_NAME}-${{ matrix.rid }}"
+          archive "publish/framework-dependent" "kpm-${GITHUB_REF_NAME}-${{ matrix.rid }}-framework-dependent"
           ls -la dist
 
       - uses: actions/upload-artifact@v4
@@ -92,13 +102,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat > notes.md <<'NOTES'
-          Self-contained `kpm` binaries — no .NET installation required.
-
           Download the archive for your platform, extract it, and put `kpm` on your PATH:
 
           ```
           kpm add Keysharp/FindText
           ```
+
+          `kpm-<version>-<platform>` is self-contained and needs no .NET installation — that is the
+          one to take unless you know otherwise.
+
+          `…-framework-dependent` is the same tool at 465 KB, relying on a .NET runtime already on
+          the machine. It exists for shipping alongside something that provides one, such as
+          Keysharp; installing a second copy of the runtime there would dwarf the host.
 
           Verify a download against `SHA256SUMS`. Packages install from
           [keysharp-org/Packages](https://github.com/keysharp-org/Packages).
