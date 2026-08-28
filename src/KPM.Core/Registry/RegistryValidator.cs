@@ -226,6 +226,18 @@ public static class RegistryValidator
 		foreach (var problem in CheckLineEndings(package))
 			yield return problem;
 
+		// An overlay for a platform the package does not declare is never packed into anything, so
+		// the code would look present in the repository and be absent from every artifact.
+		foreach (var overlay in Packer.OverlayPlatforms(package.Directory))
+		{
+			if (!Platforms.IsValid(overlay))
+				yield return new ValidationProblem(where, $"platform/{overlay} is not a known platform");
+			else if (!port.Platforms.Contains(overlay))
+				yield return new ValidationProblem(where,
+												   $"platform/{overlay} exists but '{overlay}' is not in platforms, "
+												   + "so that code would never be shipped");
+		}
+
 		foreach (var platform in port.Platforms)
 		{
 			if (!newest.Artifacts.TryGetValue(platform, out var expected))

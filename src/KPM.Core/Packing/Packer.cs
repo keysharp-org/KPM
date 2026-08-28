@@ -59,8 +59,8 @@ public static class Packer
 			new("package.json", Encoding.UTF8.GetBytes(ManifestJson.Write(manifest)))
 		};
 
-		foreach (var (relative, absolute) in files)
-			entries.Add(new DeterministicZip.Entry(relative, File.ReadAllBytes(absolute)));
+		foreach (var (archivePath, absolute) in files)
+			entries.Add(new DeterministicZip.Entry(archivePath, File.ReadAllBytes(absolute)));
 
 		// Sorting here rather than at each call site is what makes the archive independent of the
 		// order the filesystem happened to enumerate.
@@ -81,16 +81,42 @@ public static class Packer
 	}
 
 	/// <summary>
-	/// The files a package contributes: its <c>src/</c> tree, its top-level documents, and — for a
-	/// platform-specific build — that platform's native payload only.
+	/// The files a package contributes to one platform's artifact: everything in <c>src/</c>, plus
+	/// this platform's own <c>platform/&lt;rid&gt;/</c> files, its top-level documents, and its
+	/// native payload.
+	///
+	/// A file's location says exactly which artifacts contain it: <c>src/</c> means every one,
+	/// <c>platform/&lt;rid&gt;/</c> means that one only. The two may not both provide the same
+	/// archive path — that is an error rather than a silent win for either, because a reader
+	/// looking at <c>src/Engine.ahk</c> would otherwise have no way to tell it is replaced on Linux.
+	///
+	/// This is how a package ships different code per platform while every file stays plain,
+	/// portable script. The alternative — one source with compile-time platform branches — is a
+	/// Keysharp-only construct that AutoHotkey rejects outright, so a package using it could never
+	/// claim both engines.
 	/// </summary>
-	private static List<(string Relative, string Absolute)> Collect(string root, string platform)
+	private static Dictionary<string, string> Collect(string root, string platform)
 	{
-		var result = new List<(string, string)>();
-		var srcDir = Path.Combine(root, "src");
+		var files = new Dictionary<string, string>(StringComparer.Ordinal);
+		var sourceDirectory = Path.Combine(root, "src");
 
-		if (Directory.Exists(srcDir))
-			AddTree(root, srcDir, result);
+		if (Directory.Exists(sourceDirectory))
+			AddTree(sourceDirectory, "src/", files, "src");
+
+		// Placed inside src/ so a package's own includes and the manifest's entry path never vary by
+		// platform — only which artifact carries the file does.
+		var specific = Path.Combine(root, "platform", platform);
+
+		if (Directory.Exists(specific))
+			AddTree(specific, "src/", files, $"platform/{platform}");
+
+		if (platform != Platforms.Any)
+		{
+			var nativeDirectory = Path.Combine(root, "native", platform);
+
+			if (Directory.Exists(nativeDirectory))
+				AddTree(nativeDirectory, $"native/{platform}/", files, $"native/{platform}");
+		}
 
 		foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.TopDirectoryOnly))
 		{
@@ -100,37 +126,56 @@ public static class Packer
 				continue;
 
 			if (documentPrefixes.Any(p => name.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
-				result.Add((name, file));
+				files[name] = file;
 		}
 
-		if (platform != Platforms.Any)
-		{
-			var nativeDir = Path.Combine(root, "native", platform);
-
-			if (Directory.Exists(nativeDir))
-				AddTree(root, nativeDir, result);
-		}
-
-		return result;
+		return files;
 	}
 
-	private static void AddTree(string root, string directory, List<(string, string)> into)
+	private static void AddTree(string baseDirectory, string archivePrefix, Dictionary<string, string> into,
+								string origin)
 	{
-		foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+		foreach (var file in Directory.EnumerateFiles(baseDirectory, "*", SearchOption.AllDirectories))
 		{
-			var relative = Path.GetRelativePath(root, file).Replace('\\', '/');
-			ValidateArchivePath(relative);
-
 			if (Path.GetFileName(file).StartsWith('.'))
 				continue;
+
+			var relative = Path.GetRelativePath(baseDirectory, file).Replace('\\', '/');
+			var archivePath = archivePrefix + relative;
+			ValidateArchivePath(archivePath);
 
 			// A symlink's target is outside the archive's control, so what a consumer would extract
 			// is not what the author reviewed. Packing the target's bytes silently would be worse.
 			if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
-				throw new InvalidOperationException($"'{relative}' is a symbolic link; packages must contain regular files");
+				throw new InvalidOperationException($"'{archivePath}' is a symbolic link; packages must contain regular files");
 
-			into.Add((relative, file));
+			if (into.TryGetValue(archivePath, out var existing))
+			{
+				throw new InvalidOperationException(
+					$"'{archivePath}' is provided by both '{Describe(existing, baseDirectory, relative, origin)}' and "
+					+ $"'{origin}/{relative}'. A file belongs in src/ if every platform gets it, or in "
+					+ "platform/<rid>/ if only one does — never both, so that where a file lives says which "
+					+ "artifacts contain it.");
+			}
+
+			into[archivePath] = file;
 		}
+	}
+
+	private static string Describe(string existingPath, string baseDirectory, string relative, string origin) =>
+		existingPath.Replace('\\', '/').Contains("/src/", StringComparison.Ordinal) && origin != "src"
+		? $"src/{relative}"
+		: relative;
+
+	/// <summary>The platforms a package directory ships platform-specific source for.</summary>
+	public static IEnumerable<string> OverlayPlatforms(string packageDirectory)
+	{
+		var overlayRoot = Path.Combine(packageDirectory, "platform");
+
+		if (!Directory.Exists(overlayRoot))
+			return [];
+
+		return Directory.EnumerateDirectories(overlayRoot).Select(Path.GetFileName).OfType<string>();
 	}
 
 	/// <summary>

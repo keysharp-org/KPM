@@ -118,6 +118,68 @@ public sealed class PackerTests
 		Assert.That(any.Paths, Has.None.StartWith("native/"));
 	}
 
+	/// <summary>
+	/// The mechanism that lets a package ship different code per platform while every file stays
+	/// plain, portable script — as opposed to compile-time platform branches, which AutoHotkey
+	/// rejects outright, so a package using them could never claim both engines.
+	/// </summary>
+	[Test]
+	public void PlatformSpecificSourceLandsInThatPlatformsArtifactOnly()
+	{
+		var directory = MakePackage();
+		_ = Directory.CreateDirectory(Path.Combine(directory, "platform", "linux-x64"));
+		_ = Directory.CreateDirectory(Path.Combine(directory, "platform", "any"));
+		File.WriteAllText(Path.Combine(directory, "platform", "any", "Engine.ks"), "; windows\n");
+		File.WriteAllText(Path.Combine(directory, "platform", "linux-x64", "Engine.ks"), "; linux\n");
+		var linux = Packer.Pack(directory, Manifest(), "linux-x64");
+		var portable = Packer.Pack(directory, Manifest(), Platforms.Any);
+
+		// Platform-specific files land inside src/, so a consumer's include never varies by platform.
+		Assert.That(ReadEntry(linux, "src/Engine.ks"), Is.EqualTo("; linux\n"));
+		Assert.That(ReadEntry(portable, "src/Engine.ks"), Is.EqualTo("; windows\n"));
+		// One platform's code never reaches another's artifact, and nothing leaks the layout.
+		Assert.That(linux.Paths, Has.None.Contain("platform/"));
+		Assert.That(linux.Bytes, Is.Not.EqualTo(portable.Bytes).AsCollection);
+		// Shared files are identical everywhere.
+		Assert.That(ReadEntry(linux, "src/Demo.ks"), Is.EqualTo(ReadEntry(portable, "src/Demo.ks")));
+	}
+
+	/// <summary>
+	/// The rule that keeps the layout honest: if src/ could be silently shadowed, a reader looking
+	/// at src/Engine.ks would have no way to tell it is replaced on Linux.
+	/// </summary>
+	[Test]
+	public void AFileCannotBeProvidedByBothSharedAndPlatformSpecificSource()
+	{
+		var directory = MakePackage();
+		_ = Directory.CreateDirectory(Path.Combine(directory, "platform", "linux-x64"));
+		File.WriteAllText(Path.Combine(directory, "src", "Engine.ks"), "; shared\n");
+		File.WriteAllText(Path.Combine(directory, "platform", "linux-x64", "Engine.ks"), "; linux\n");
+		var error = Assert.Throws<InvalidOperationException>(
+						() => Packer.Pack(directory, Manifest(), "linux-x64"));
+		Assert.That(error!.Message, Does.Contain("src/Engine.ks").And.Contain("platform/linux-x64"));
+		// The unaffected platform still packs: the clash only exists where both would apply.
+		Assert.DoesNotThrow(() => Packer.Pack(directory, Manifest(), "win-x64"));
+	}
+
+	[Test]
+	public void OverlayPlatformsAreDiscoverable()
+	{
+		var directory = MakePackage();
+		_ = Directory.CreateDirectory(Path.Combine(directory, "platform", "osx-arm64"));
+		File.WriteAllText(Path.Combine(directory, "platform", "osx-arm64", "Engine.ks"), "; mac\n");
+		Assert.That(Packer.OverlayPlatforms(directory), Is.EquivalentTo(new[] { "osx-arm64" }));
+		Assert.That(Packer.OverlayPlatforms(Path.Combine(root, "nonexistent")), Is.Empty);
+	}
+
+	private static string ReadEntry(PackResult result, string path)
+	{
+		using var stream = new MemoryStream(result.Bytes);
+		using var zip = new ZipArchive(stream, ZipArchiveMode.Read);
+		using var reader = new StreamReader(zip.GetEntry(path)!.Open());
+		return reader.ReadToEnd();
+	}
+
 	[Test]
 	public void PackingRefusesADirectoryWithNoSources()
 	{
