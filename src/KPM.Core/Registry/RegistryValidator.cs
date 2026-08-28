@@ -223,6 +223,9 @@ public static class RegistryValidator
 		if (!File.Exists(entryPath))
 			yield return new ValidationProblem(where, $"entry '{port.Entry}' does not exist");
 
+		foreach (var problem in CheckLineEndings(package))
+			yield return problem;
+
 		foreach (var platform in port.Platforms)
 		{
 			if (!newest.Artifacts.TryGetValue(platform, out var expected))
@@ -267,6 +270,50 @@ public static class RegistryValidator
 			else if (packed.Size != expected.Size)
 				yield return new ValidationProblem($"{id} {port.Version}-r{newest.Revision}",
 												   $"artifact '{platform}' size {expected.Size} should be {packed.Size}");
+		}
+	}
+
+	/// <summary>
+	/// Flags CRLF in a source-hosted package's packed files.
+	///
+	/// A package's artifact is packed from these bytes and identified by their hash, so a file whose
+	/// line endings depend on which platform checked it out packs to two different hashes and fails
+	/// verification on whichever platform did not build it. The repository's <c>.gitattributes</c>
+	/// pins <c>eol=lf</c> to prevent this; the check exists because the failure is otherwise invisible
+	/// until CI runs on the other operating system.
+	/// </summary>
+	private static IEnumerable<ValidationProblem> CheckLineEndings(RegistryPackage package)
+	{
+		var sourceDirectory = Path.Combine(package.Directory, "src");
+
+		if (!Directory.Exists(sourceDirectory))
+			yield break;
+
+		foreach (var file in Directory.EnumerateFiles(sourceDirectory, "*", SearchOption.AllDirectories))
+		{
+			byte[] head;
+
+			try
+			{
+				using var stream = File.OpenRead(file);
+				head = new byte[Math.Min(stream.Length, 64 * 1024)];
+				stream.ReadExactly(head);
+			}
+			catch (IOException)
+			{
+				continue;
+			}
+
+			// A lone CR belongs to a binary file, not a text one; only CRLF is the portability hazard.
+			var index = Array.IndexOf(head, (byte)'\r');
+
+			if (index >= 0 && index + 1 < head.Length && head[index + 1] == (byte)'\n')
+			{
+				yield return new ValidationProblem(
+						 $"{package.Id} {Path.GetRelativePath(package.Directory, file).Replace('\\', '/')}",
+						 "has CRLF line endings, so it would pack to a different hash on Linux than on Windows. "
+						 + "Convert it to LF (the repository's .gitattributes pins eol=lf).");
+			}
 		}
 	}
 
