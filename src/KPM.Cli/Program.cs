@@ -294,9 +294,9 @@ static async Task<int> Search(CommandLine cli)
 		Console.WriteLine($"    {match.Package.Description}");
 
 		// Shown next to the id, because the id names the maintainer and people read it as the author.
-		if (match.Package.Authors.Count > 0)
+		if (match.Package.Authors is { Count: > 0 } authors)
 		{
-			var by = $"    by {string.Join(", ", match.Package.Authors)}";
+			var by = $"    by {string.Join(", ", authors)}";
 			Console.WriteLine(match.Package.DerivedFrom is { } from
 							  ? $"{by}; packaged by {match.Package.Owner}, derived from {from}"
 							  : by);

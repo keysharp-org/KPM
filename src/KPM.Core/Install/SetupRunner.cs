@@ -9,7 +9,7 @@ public sealed record SetupStep(PackageId Id, SetupNote Note, string? ScriptPath)
 	public string Describe() =>
 		ScriptPath is null
 		? "(nothing to run; follow the instructions above)"
-		: string.Join(" ", new[] { Quote(ScriptPath) }.Concat(Note.Arguments.Select(Quote)));
+		: string.Join(" ", new[] { Quote(ScriptPath) }.Concat((Note.Arguments ?? []).Select(Quote)));
 
 	private static string Quote(string value) => value.Contains(' ') ? $"\"{value}\"" : value;
 }
@@ -85,7 +85,7 @@ public sealed class SetupRunner
 		if (step.Note.Elevate && OperatingSystem.IsWindows())
 			info.Verb = "runas";
 
-		foreach (var argument in step.Note.Arguments)
+		foreach (var argument in step.Note.Arguments ?? [])
 			info.ArgumentList.Add(argument);
 
 		using var process = Process.Start(info)

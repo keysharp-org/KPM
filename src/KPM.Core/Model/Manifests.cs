@@ -20,10 +20,16 @@ public sealed class PackageManifest
 	public string Owner { get; set; } = "";
 
 	/// <summary>
-	/// Who wrote the code, when that is not the owner. Left empty when the owner is the author,
-	/// which is the ordinary case; a port must set it, because the owner is then only the packager.
+	/// Who wrote the code, when that is not the owner. Absent when the owner is the author, which is
+	/// the ordinary case; a port must set it, because the owner is then only the packager.
+	///
+	/// Omitted rather than written empty, so adding it did not append <c>"authors": []</c> to every
+	/// package the bot touches. As with <see cref="SetupNote"/>, this is per-property: the same
+	/// serializer writes the manifest inside every artifact, so moving the global default would
+	/// change every artifact's bytes and every published hash.
 	/// </summary>
-	public List<string> Authors { get; set; } = [];
+	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+	public List<string>? Authors { get; set; }
 
 	/// <summary>
 	/// The registry id this package is a port or fork of, e.g. <c>feiyue/FindText</c> for a Keysharp
@@ -148,17 +154,25 @@ public sealed class SetupNote
 	/// </summary>
 	public string? Script { get; set; }
 
+	// Omitted when they carry no information, so adding them did not rewrite the setup notes already
+	// in the registry with four empty fields. Deliberately per-property: the same serializer options
+	// write the manifest embedded in every artifact, so changing the global default would change
+	// every artifact's bytes, and with them every published hash.
 	/// <summary>Arguments passed to <see cref="Script"/>, exactly as declared. No shell, no expansion.</summary>
-	public List<string> Arguments { get; set; } = [];
+	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+	public List<string>? Arguments { get; set; }
 
 	/// <summary>Whether the step needs elevation, which the user is told before confirming.</summary>
+	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
 	public bool Elevate { get; set; }
 
 	/// <summary>Whether the step only takes effect after a restart, so the user is not left guessing.</summary>
+	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
 	public bool Reboot { get; set; }
 
 	/// <summary>Platforms this step applies to; empty means all of them.</summary>
-	public List<string> Platforms { get; set; } = [];
+	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+	public List<string>? Platforms { get; set; }
 
 	/// <summary>Whether this note describes something <c>kpm setup</c> could actually run.</summary>
 	[JsonIgnore]
@@ -166,7 +180,7 @@ public sealed class SetupNote
 
 	/// <summary>Whether the step applies to the machine <c>kpm setup</c> is running on.</summary>
 	public bool AppliesTo(string platform) =>
-		Platforms.Count == 0 || Model.Platforms.FallbackChain(platform).Any(Platforms.Contains);
+		Platforms is not { Count: > 0 } || Model.Platforms.FallbackChain(platform).Any(Platforms.Contains);
 }
 
 /// <summary>Where a release's content came from — provenance, not a download location.</summary>

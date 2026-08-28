@@ -10,7 +10,8 @@ public sealed class CatalogEntry
 	public string Id { get; set; } = "";
 	public string Name { get; set; } = "";
 	public string Owner { get; set; } = "";
-	public List<string> Authors { get; set; } = [];
+	[System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+	public List<string>? Authors { get; set; }
 	public string? DerivedFrom { get; set; }
 	public string? DisplayName { get; set; }
 	public string Description { get; set; } = "";
