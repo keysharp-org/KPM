@@ -104,6 +104,7 @@ public sealed class RegistryClient(HttpClient? http = null, RegistrySource? sour
 		var payload = await response.Content.ReadAsByteArrayAsync(ct);
 		var json = Decompress(payload);
 		var index = ManifestJson.Read<RegistryIndex>(json);
+		index.EnsureSupported();
 		_ = KpmPaths.EnsureDirectory(CacheDirectory);
 		await File.WriteAllTextAsync(IndexPath, json, ct);
 
@@ -132,8 +133,12 @@ public sealed class RegistryClient(HttpClient? http = null, RegistrySource? sour
 		return Encoding.UTF8.GetString(payload);
 	}
 
-	private async Task<RegistryIndex> ReadCachedAsync(CancellationToken ct) =>
-		ManifestJson.Read<RegistryIndex>(await File.ReadAllTextAsync(IndexPath, ct));
+	private async Task<RegistryIndex> ReadCachedAsync(CancellationToken ct)
+	{
+		var index = ManifestJson.Read<RegistryIndex>(await File.ReadAllTextAsync(IndexPath, ct));
+		index.EnsureSupported();
+		return index;
+	}
 
 	private static string Describe(TimeSpan age) =>
 		age.TotalMinutes < 60 ? $"{(int)age.TotalMinutes} minute(s)"

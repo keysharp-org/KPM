@@ -376,7 +376,6 @@ static async Task<int> Probe(CommandLine cli)
 {
 	var directory = Path.GetFullPath(cli.Positionals.FirstOrDefault() ?? Directory.GetCurrentDirectory());
 	var output = Path.GetFullPath(cli.ValueOrDefault("out", Path.Combine(Path.GetTempPath(), "kpm-probe")));
-	var platform = cli.ValueOrDefault("platform", Platforms.Any);
 	var package = await RegistryTree.ReadPackageAsync(directory);
 
 	if (!package.IsSourceHosted)
@@ -386,6 +385,17 @@ static async Task<int> Probe(CommandLine cli)
 	}
 
 	var port = package.Port!;
+	// The caller names the machine being checked; which artifact that machine gets is the registry's
+	// decision, so resolve it the same way an install would rather than packing the name literally.
+	var target = cli.ValueOrDefault("platform", Platforms.Current);
+	var platform = Platforms.Select(port.Platforms, target);
+
+	if (platform is null)
+	{
+		Console.Error.WriteLine($"error: {package.Id} ships nothing for {target} "
+								+ $"(it builds for {string.Join(", ", port.Platforms)})");
+		return 1;
+	}
 
 	if (Directory.Exists(output))
 		Directory.Delete(output, recursive: true);
@@ -401,7 +411,7 @@ static async Task<int> Probe(CommandLine cli)
 		var index = IndexBuilder.BuildIndex(await RegistryTree.ReadAsync(registryRoot));
 		var resolution = new Resolver(index).Resolve(port.Dependencies,
 						 new ResolveContext(System.Version.Parse(cli.ValueOrDefault("engine-version", "0.0.0.17")),
-											platform == Platforms.Any ? Platforms.Current : platform,
+											target,
 											cli.ValueOrDefault("engine", Engines.Keysharp)));
 		_ = await new Installer(new ArtifactStore()).InstallAsync(resolution, output);
 	}
@@ -418,8 +428,7 @@ static async Task<int> Probe(CommandLine cli)
 		Dependencies = new Dictionary<string, string>(port.Dependencies)
 	};
 	var packed = Packer.Pack(directory, embedded, platform);
-	var target = Installer.PackageDirectory(output, package.Id);
-	Unpacker.Extract(packed.Bytes, target);
+	Unpacker.Extract(packed.Bytes, Installer.PackageDirectory(output, package.Id));
 	// Written by hand rather than through Installer so the probe works before anything is published.
 	var forwarder = Installer.ForwarderPath(output, package.Id);
 	_ = Directory.CreateDirectory(Path.GetDirectoryName(forwarder)!);

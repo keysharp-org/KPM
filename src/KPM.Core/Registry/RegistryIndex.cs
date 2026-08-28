@@ -9,9 +9,30 @@ namespace Kpm.Registry;
 /// </summary>
 public sealed class RegistryIndex
 {
+	/// <summary>The highest index schema this build understands.</summary>
+	public const int SupportedSchema = 1;
+
 	public int Schema { get; set; } = 1;
 	public DateTimeOffset Generated { get; set; }
 	public List<IndexedPackage> Packages { get; set; } = [];
+
+	/// <summary>
+	/// Refuses an index written to a newer schema.
+	///
+	/// Without this an old client would parse a future index with today's rules, ignore whatever it
+	/// did not recognise, and resolve confidently against a half-understood document. Failing with
+	/// "update kpm" is the only honest answer, and it is only possible because the version is
+	/// declared rather than inferred.
+	/// </summary>
+	public void EnsureSupported()
+	{
+		if (Schema > SupportedSchema)
+		{
+			throw new InvalidOperationException(
+				$"this registry index uses schema {Schema}, and this version of kpm understands "
+				+ $"{SupportedSchema}. Update kpm to install from it.");
+		}
+	}
 
 	private Dictionary<string, IndexedPackage>? lookup;
 

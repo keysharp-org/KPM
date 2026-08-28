@@ -154,6 +154,13 @@ public static class RegistryValidator
 			if (artifact.Size <= 0)
 				yield return new ValidationProblem(where, $"artifact '{platform}' has no size");
 
+			// A release whose sources were emptied resolves and then fails to install, which is a
+			// worse failure than not resolving at all. Merge-time CI always adds the registry's own
+			// URL, so an empty list here means one was removed.
+			if (artifact.Sources.Count == 0)
+				yield return new ValidationProblem(where,
+												   $"artifact '{platform}' lists no sources, so nothing could download it");
+
 			if (!version.Platforms.Contains(platform))
 				yield return new ValidationProblem(where, $"artifact '{platform}' is not listed in platforms");
 		}
@@ -218,10 +225,6 @@ public static class RegistryValidator
 		}
 
 		var newest = declared.MaxBy(v => v.Revision)!;
-		var entryPath = Path.Combine(package.Directory, port.Entry.Replace('/', Path.DirectorySeparatorChar));
-
-		if (!File.Exists(entryPath))
-			yield return new ValidationProblem(where, $"entry '{port.Entry}' does not exist");
 
 		foreach (var problem in CheckLineEndings(package))
 			yield return problem;
@@ -274,6 +277,21 @@ public static class RegistryValidator
 			{
 				yield return new ValidationProblem(where, $"packing '{platform}' failed: {packError}");
 				continue;
+			}
+
+			// Checked per artifact and case-sensitively, because the entry may come from a platform
+			// directory rather than the shared tree — and because File.Exists would answer
+			// case-insensitively on Windows and let a manifest through that fails on Linux.
+			if (!packed.Paths.Contains(port.Entry, StringComparer.Ordinal))
+			{
+				var nearMiss = packed.Paths.FirstOrDefault(p => p.Equals(port.Entry, StringComparison.OrdinalIgnoreCase));
+				yield return new ValidationProblem($"{id} {platform}",
+												   nearMiss is not null
+												   ? $"entry is '{port.Entry}' but the artifact contains '{nearMiss}'; "
+												     + "the case must match exactly or the include fails on Linux"
+												   : $"entry '{port.Entry}' is not in this platform's artifact. "
+													 + "A file only reaches an artifact from the package top or from "
+													 + $"platform/{platform}/.");
 			}
 
 			if (!packed.Sha256.Equals(expected.Sha256, StringComparison.OrdinalIgnoreCase))

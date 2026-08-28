@@ -86,6 +86,19 @@ public readonly struct PackageId : IEquatable<PackageId>
 			return false;
 		}
 
+		// An installed package is a directory next to a generated forwarder script named after it, so
+		// a package called "Foo.ks" would want the same path as the forwarder for a package "Foo".
+		foreach (var extension in (string[])[".ks", ".ahk", ".ah2"])
+		{
+			if (name.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+			{
+				error = $"'{name}' may not end in '{extension}': a package name is not a file name, "
+						+ $"and it would collide with the include written for a package called "
+						+ $"'{name[..^extension.Length]}'";
+				return false;
+			}
+		}
+
 		id = new PackageId(owner, name);
 		return true;
 	}

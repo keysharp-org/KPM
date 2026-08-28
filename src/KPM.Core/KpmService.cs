@@ -29,7 +29,8 @@ public sealed class KpmService(RegistryClient? registry = null, ArtifactStore? s
 		var resolution = new Resolver(fetch.Index).Resolve(project.Manifest.Dependencies, context);
 		var installed = await new Installer(store).InstallAsync(resolution, project.Directory, ct);
 		await project.SaveLockAsync(ToLockFile(resolution), ct);
-		return new InstallReport(installed, resolution, fetch.Warning);
+		var warnings = new List<string?> { fetch.Warning, DescribeNameCollisions(resolution) };
+		return new InstallReport(installed, resolution, string.Join("\n", warnings.Where(w => w is not null)) is { Length: > 0 } text ? text : null);
 	}
 
 	/// <summary>
@@ -43,6 +44,26 @@ public sealed class KpmService(RegistryClient? registry = null, ArtifactStore? s
 
 		var installed = await new Installer(store).InstallAsync(project.Lock, project.Directory, ct);
 		return new InstallReport(installed, null, null);
+	}
+
+	/// <summary>
+	/// Warns when two resolved packages share a name.
+	///
+	/// The registry is namespaced but the language is not: <c>Descolada/OCR</c> and
+	/// <c>Keysharp/OCR</c> both define a global <c>OCR</c> class, and including both is a
+	/// redefinition error no package manager can prevent. The collision is worth naming at install
+	/// time, because the error it eventually causes points at the script, not at the two packages
+	/// that disagree.
+	/// </summary>
+	private static string? DescribeNameCollisions(DependencyResolution resolution)
+	{
+		var collisions = resolution.Packages
+						 .GroupBy(p => p.Id.Name, StringComparer.OrdinalIgnoreCase)
+						 .Where(g => g.Count() > 1)
+						 .Select(g => $"{string.Join(" and ", g.Select(p => p.Id))} are both installed and both "
+									  + $"provide '{g.Key}'; including both will collide")
+						 .ToList();
+		return collisions.Count > 0 ? string.Join("\n", collisions) : null;
 	}
 
 	public static LockFile ToLockFile(DependencyResolution resolution) => new()

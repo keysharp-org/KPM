@@ -19,6 +19,11 @@ public sealed class PackageIdTests
 		Assert.That(id!.Value.ToString(), Is.EqualTo(text));
 	}
 
+	// A package name is not a file name: "Owner/Foo.ks" would want the same path as the forwarder
+	// script generated for "Owner/Foo".
+	[TestCase("Owner/Foo.ks", TestName = "name ends in .ks")]
+	[TestCase("Owner/Foo.ahk", TestName = "name ends in .ahk")]
+	[TestCase("Owner/Foo.AHK", TestName = "name ends in .AHK")]
 	[TestCase("findtext", TestName = "no owner")]
 	[TestCase("a/b/c", TestName = "two slashes")]
 	[TestCase("-lead/x", TestName = "leading hyphen")]
@@ -49,6 +54,42 @@ public sealed class PackageIdTests
 	[Test]
 	public void TheRegistryPathIsAlwaysForwardSlashedAndKeepsItsCasing() =>
 		Assert.That(PackageId.Parse("Descolada/OCR").RegistryPath, Is.EqualTo("packages/Descolada/OCR"));
+
+	/// <summary>A dot is legal inside a name; only a trailing script extension is not.</summary>
+	[Test]
+	public void ADotInsideANameIsStillAllowed() =>
+		Assert.That(PackageId.TryParse("Owner/Foo.Bar", out _, out _), Is.True);
+}
+
+[TestFixture]
+public sealed class PlatformTests
+{
+	[Test]
+	public void FallbackRunsFromArchitectureThroughOperatingSystemToPortable() =>
+		Assert.That(Platforms.FallbackChain("linux-arm64"),
+					Is.EqualTo(new[] { "linux-arm64", "linux", "any" }).AsCollection);
+
+	[Test]
+	public void ThePortableBuildFallsBackToNothing() =>
+		Assert.That(Platforms.FallbackChain(Platforms.Any), Is.EqualTo(new[] { "any" }).AsCollection);
+
+	[Test]
+	public void SelectionTakesTheMostSpecificAvailable()
+	{
+		Assert.That(Platforms.Select(["any", "linux", "linux-x64"], "linux-x64"), Is.EqualTo("linux-x64"));
+		Assert.That(Platforms.Select(["any", "linux"], "linux-x64"), Is.EqualTo("linux"));
+		Assert.That(Platforms.Select(["any"], "linux-x64"), Is.EqualTo("any"));
+		Assert.That(Platforms.Select(["win"], "linux-x64"), Is.Null);
+	}
+
+	[Test]
+	public void OperatingSystemTiersAreValidPlatforms()
+	{
+		foreach (var os in Platforms.OperatingSystems)
+			Assert.That(Platforms.IsValid(os), Is.True, os);
+
+		Assert.That(Platforms.IsValid("windows"), Is.False, "the tier is spelled like the rid prefix");
+	}
 }
 
 [TestFixture]

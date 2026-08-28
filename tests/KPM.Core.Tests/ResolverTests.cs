@@ -165,6 +165,37 @@ public sealed class ResolverTests
 		Assert.That(error!.Message, Does.Contain("supports keysharp"));
 	}
 
+	/// <summary>
+	/// The failure this tier exists to prevent: a package shipping "any" plus linux-x64, where the
+	/// "any" build is really the Windows one, must not hand Windows code to a linux-arm64 machine.
+	/// </summary>
+	[Test]
+	public void AnArchitectureFallsBackToItsOperatingSystemBeforeThePortableBuild()
+	{
+		var index = Index(Release("a/x", "1.0.0", platforms: [Platforms.Any, "linux", "win"]));
+		var resolution = new Resolver(index).Resolve(new Dictionary<string, string> { ["a/x"] = "^1.0" },
+													new ResolveContext(keysharp, "linux-arm64"));
+		Assert.That(resolution.Packages.Single().Platform, Is.EqualTo("linux"));
+	}
+
+	[Test]
+	public void ThePortableBuildIsUsedOnlyWhenNothingMoreSpecificExists()
+	{
+		var index = Index(Release("a/x", "1.0.0", platforms: [Platforms.Any, "linux"]));
+		var resolution = new Resolver(index).Resolve(new Dictionary<string, string> { ["a/x"] = "^1.0" },
+													new ResolveContext(keysharp, "osx-arm64"));
+		Assert.That(resolution.Packages.Single().Platform, Is.EqualTo(Platforms.Any));
+	}
+
+	[Test]
+	public void TheMostSpecificArtifactWinsOverBothFallbacks()
+	{
+		var index = Index(Release("a/x", "1.0.0", platforms: [Platforms.Any, "linux", "linux-arm64"]));
+		var resolution = new Resolver(index).Resolve(new Dictionary<string, string> { ["a/x"] = "^1.0" },
+													new ResolveContext(keysharp, "linux-arm64"));
+		Assert.That(resolution.Packages.Single().Platform, Is.EqualTo("linux-arm64"));
+	}
+
 	[Test]
 	public void AnExactPlatformArtifactBeatsThePortableOne()
 	{
