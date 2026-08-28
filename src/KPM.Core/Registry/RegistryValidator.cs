@@ -19,6 +19,17 @@ public sealed record ValidationProblem(string Where, string Message)
 /// </summary>
 public static class RegistryValidator
 {
+	/// <summary>
+	/// Limits that also appear in the JSON Schemas, and must stay in step with them.
+	///
+	/// The schemas are what CI enforces and this is what a contributor runs locally, so a rule in one
+	/// and not the other means being told the submission is fine and then having it rejected — which
+	/// is exactly what happened on the registry's first pull request.
+	/// </summary>
+	public const int MaxDescription = 300;
+
+	public const int MaxName = 64;
+
 	public static async Task<List<ValidationProblem>> ValidateAsync(string registryRoot, CancellationToken ct = default)
 	{
 		var packages = await RegistryTree.ReadAsync(registryRoot, ct);
@@ -81,6 +92,15 @@ public static class RegistryValidator
 
 		if (string.IsNullOrWhiteSpace(manifest.Description))
 			problems.Add(new ValidationProblem(where, "description is empty"));
+		else if (manifest.Description.Length > MaxDescription)
+		{
+			problems.Add(new ValidationProblem(where,
+											   $"description is {manifest.Description.Length} characters; the limit is "
+											   + $"{MaxDescription}. It is a catalog one-liner, not the README."));
+		}
+
+		if (manifest.DisplayName is { Length: > MaxName } display)
+			problems.Add(new ValidationProblem(where, $"displayName is {display.Length} characters; the limit is {MaxName}"));
 
 		if (manifest.DerivedFrom is { } derived)
 		{

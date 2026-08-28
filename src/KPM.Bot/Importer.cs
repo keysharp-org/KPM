@@ -313,7 +313,7 @@ public sealed class Importer(GitHub github, ImportOptions options)
 			Name = id.Name,
 			Owner = id.Owner,
 			DisplayName = key.Split('/')[^1],
-			Description = string.IsNullOrWhiteSpace(entry.Description) ? $"Imported from {key}." : entry.Description,
+			Description = Summarize(entry.Description, key),
 			License = entry.License ?? "NOASSERTION",
 			Homepage = entry.Homepage ?? $"https://github.com/{repository}",
 			Categories = [.. entry.Keywords.Take(8)],
@@ -566,6 +566,34 @@ public sealed class Importer(GitHub github, ImportOptions options)
 					  + "If this package needs a driver, a tool, or a setup step, follow its own instructions.",
 			Url = entry.Homepage
 		};
+	}
+
+	/// <summary>
+	/// Fits an upstream description into the catalog's one-line budget.
+	///
+	/// Upstream descriptions have no length rule and occasionally run to a paragraph, which the
+	/// registry's schema rejects — one import did exactly that and was only caught by CI. Cut at a
+	/// sentence where possible, since the first sentence is nearly always the summary, and fall back
+	/// to a word boundary.
+	/// </summary>
+	private static string Summarize(string? description, string key)
+	{
+		if (string.IsNullOrWhiteSpace(description))
+			return $"Imported from {key}.";
+
+		description = description.Trim();
+
+		if (description.Length <= Registry.RegistryValidator.MaxDescription)
+			return description;
+
+		var budget = Registry.RegistryValidator.MaxDescription - 1;
+		var sentence = description.LastIndexOf(". ", budget, StringComparison.Ordinal);
+
+		if (sentence > budget / 2)
+			return description[..(sentence + 1)];
+
+		var word = description.LastIndexOf(' ', budget);
+		return description[..(word > 0 ? word : budget)].TrimEnd(',', ';', ':', '-') + "…";
 	}
 
 	private static bool IsGlob(string pattern) => pattern.Contains('*') || pattern.Contains('?');

@@ -62,6 +62,37 @@ public sealed class PackageIdTests
 }
 
 [TestFixture]
+public sealed class ValidatorLimitTests
+{
+	/// <summary>
+	/// The schemas CI enforces and the validator a contributor runs locally must agree, or the
+	/// answer before pushing differs from the answer after — which is how the registry's first pull
+	/// request failed on a package that `kpm validate` had called fine.
+	/// </summary>
+	[Test]
+	public void TheDescriptionLimitMatchesTheSchema()
+	{
+		var schema = File.ReadAllText(Path.Combine(RepositoryRoot(), "schemas", "package.schema.json"));
+		using var document = System.Text.Json.JsonDocument.Parse(schema);
+		var limit = document.RootElement.GetProperty("properties").GetProperty("description")
+					.GetProperty("maxLength").GetInt32();
+		Assert.That(Kpm.Registry.RegistryValidator.MaxDescription, Is.EqualTo(limit));
+	}
+
+	/// <summary>The registry repository sits beside this one; skip rather than fail when it does not.</summary>
+	private static string RepositoryRoot()
+	{
+		var candidate = Path.GetFullPath(Path.Combine(TestContext.CurrentContext.TestDirectory,
+													  "..", "..", "..", "..", "..", "..", "Packages"));
+
+		if (!Directory.Exists(Path.Combine(candidate, "schemas")))
+			Assert.Ignore($"the registry repository is not checked out beside this one ({candidate})");
+
+		return candidate;
+	}
+}
+
+[TestFixture]
 public sealed class PlatformTests
 {
 	[Test]
