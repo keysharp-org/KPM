@@ -138,8 +138,35 @@ public sealed class SetupNote
 	/// <summary>Where the instructions live.</summary>
 	public string? Url { get; set; }
 
-	/// <summary>An archive-relative path the user may run themselves, if the package ships one.</summary>
+	/// <summary>
+	/// An archive-relative path the package ships for this step, e.g. a driver installer.
+	///
+	/// Never run by <c>install</c> or <c>add</c> — only by <c>kpm setup</c>, which a human types on
+	/// purpose and which shows the exact command first. That split is the point: automated paths
+	/// stay inert, so nothing executes because a build resolved a dependency, while a person who
+	/// wants the driver installed gets one command instead of a copied path.
+	/// </summary>
 	public string? Script { get; set; }
+
+	/// <summary>Arguments passed to <see cref="Script"/>, exactly as declared. No shell, no expansion.</summary>
+	public List<string> Arguments { get; set; } = [];
+
+	/// <summary>Whether the step needs elevation, which the user is told before confirming.</summary>
+	public bool Elevate { get; set; }
+
+	/// <summary>Whether the step only takes effect after a restart, so the user is not left guessing.</summary>
+	public bool Reboot { get; set; }
+
+	/// <summary>Platforms this step applies to; empty means all of them.</summary>
+	public List<string> Platforms { get; set; } = [];
+
+	/// <summary>Whether this note describes something <c>kpm setup</c> could actually run.</summary>
+	[JsonIgnore]
+	public bool IsRunnable => !string.IsNullOrWhiteSpace(Script);
+
+	/// <summary>Whether the step applies to the machine <c>kpm setup</c> is running on.</summary>
+	public bool AppliesTo(string platform) =>
+		Platforms.Count == 0 || Model.Platforms.FallbackChain(platform).Any(Platforms.Contains);
 }
 
 /// <summary>Where a release's content came from — provenance, not a download location.</summary>

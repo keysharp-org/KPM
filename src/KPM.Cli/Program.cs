@@ -35,6 +35,7 @@ static async Task<int> Run(string command, CommandLine cli)
 		case "update": return await Update(cli);
 		case "search": return await Search(cli);
 		case "list": case "ls": return await List(cli);
+		case "setup": return await Setup(cli);
 		case "pack": return Pack(cli);
 		case "manifest": return await BuildManifest(cli);
 		case "index": return await BuildIndex(cli);
@@ -238,16 +239,22 @@ static void Report(InstallReport report, Project project)
 		Console.WriteLine();
 		Console.WriteLine("These packages need a step kpm does not perform for you:");
 
+		var runnable = false;
+
 		foreach (var (id, note) in report.Setup)
 		{
 			Console.WriteLine($"  {id}: {note.Message}");
-
-			if (note.Script is not null)
-				Console.WriteLine($"    run yourself: {Path.Combine(project.Directory, "Lib", "KPM", id.Owner, id.Name, note.Script)}");
+			runnable |= note.IsRunnable;
 
 			if (note.Url is not null)
 				Console.WriteLine($"    {note.Url}");
 		}
+
+		// Naming the command is the whole difference between a note and something the user can act
+		// on; `kpm setup` still shows what it will run and asks before running it.
+		Console.WriteLine(runnable
+						  ? "\nRun 'kpm setup' to perform these; it shows each command and asks first."
+						  : "\nThese have to be done by hand; 'kpm setup' lists them.");
 	}
 }
 
@@ -314,6 +321,99 @@ static async Task<int> List(CommandLine cli)
 	foreach (var package in project.Lock.Packages)
 		Console.WriteLine($"{package.Id}  {package.Version}  (r{package.Revision}, {package.Platform})");
 
+	return 0;
+}
+
+/// <summary>
+/// Performs the manual steps installed packages declare. Separate from installing on purpose: this
+/// is the only command that runs anything from a package, and only after showing what it will run.
+/// </summary>
+static async Task<int> Setup(CommandLine cli)
+{
+	var project = await Project.LoadAsync(ProjectRoot(cli));
+
+	if (project.Lock is null)
+	{
+		Console.Error.WriteLine("error: nothing is installed; run 'kpm install' first");
+		return 1;
+	}
+
+	var context = Context(cli);
+	var index = (await new KpmService().GetIndexAsync(refresh: !cli.Has("offline"))).Index;
+	var wanted = cli.Positionals.Count > 0 ? cli.Positionals : null;
+	var notes = new List<(PackageId, SetupNote)>();
+
+	foreach (var locked in project.Lock.Packages)
+	{
+		var id = PackageId.Parse(locked.Id);
+
+		if (wanted is not null && !wanted.Any(w => w.Equals(locked.Id, StringComparison.OrdinalIgnoreCase)
+												   || w.Equals(id.Name, StringComparison.OrdinalIgnoreCase)))
+			continue;
+
+		var release = index.Find(id)?.Versions
+					  .FirstOrDefault(v => v.Version == locked.Version && v.Revision == locked.Revision);
+
+		if (release?.Setup is { } note)
+			notes.Add((id, note));
+	}
+
+	var steps = SetupRunner.Plan(notes, project.Directory, context.Platform);
+
+	if (steps.Count == 0)
+	{
+		Console.WriteLine("nothing installed declares a setup step for this platform");
+		return 0;
+	}
+
+	var assumeYes = cli.Has("yes");
+	var ran = 0;
+
+	foreach (var step in steps)
+	{
+		Console.WriteLine();
+		Console.WriteLine($"{step.Id}: {step.Note.Message}");
+
+		if (step.Note.Url is not null)
+			Console.WriteLine($"  {step.Note.Url}");
+
+		if (step.ScriptPath is null)
+		{
+			// Either the package ships nothing to run, or it does but not for this platform's build.
+			Console.WriteLine(step.Note.IsRunnable
+							  ? $"  '{step.Note.Script}' is not in the installed package; follow the instructions above"
+							  : "  nothing to run automatically; follow the instructions above");
+			continue;
+		}
+
+		Console.WriteLine($"  will run: {step.Describe()}");
+
+		if (step.Note.Elevate)
+			Console.WriteLine("  as administrator");
+
+		if (step.Note.Reboot)
+			Console.WriteLine("  a restart is needed afterwards");
+
+		if (!assumeYes)
+		{
+			Console.Write("  run it now? [y/N] ");
+
+			if (Console.ReadLine()?.Trim() is not ("y" or "Y" or "yes"))
+			{
+				Console.WriteLine("  skipped");
+				continue;
+			}
+		}
+
+		if (await SetupRunner.RunAsync(step, _ => true))
+		{
+			ran++;
+			Console.WriteLine($"  done{(step.Note.Reboot ? "; restart to finish" : "")}");
+		}
+	}
+
+	Console.WriteLine();
+	Console.WriteLine($"{ran} setup step(s) run");
 	return 0;
 }
 
@@ -544,6 +644,7 @@ static void Help() => Console.WriteLine("""
 	  kpm update [--offline]         re-resolve within kpm.json's ranges and rewrite the lockfile
 	  kpm search <text>              search the registry
 	  kpm list                       show installed packages
+	  kpm setup [pkg]                perform a package's manual setup step, after showing what it runs
 	  kpm pack [dir]                 build .kspkg files from a package directory
 	  kpm mirror                     download every artifact in the registry into the local cache
 	  kpm cache [dir|clear]          inspect or empty the artifact cache

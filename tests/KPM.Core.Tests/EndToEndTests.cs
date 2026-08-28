@@ -231,6 +231,58 @@ public sealed class EndToEndTests
 		Assert.That(report.Setup[0].Id.ToString(), Is.EqualTo("tester/needsdriver"));
 	}
 
+	/// <summary>
+	/// A setup script path comes from a manifest, so it is untrusted input: it must land inside the
+	/// package that declared it, or a registry entry could point kpm at any executable on the disk.
+	/// </summary>
+	[Test]
+	public void ASetupScriptCannotPointOutsideItsOwnPackage()
+	{
+		var note = new SetupNote { Message = "x", Script = "../../../evil.exe" };
+		var id = PackageId.Parse("tester/demo");
+		var error = Assert.Throws<InvalidOperationException>(
+						() => SetupRunner.Plan([(id, note)], projectRoot, Platforms.Any));
+		Assert.That(error!.Message, Does.Contain("escapes the package directory"));
+	}
+
+	[Test]
+	public void ASetupStepIsPlannedOnlyForThePlatformsItDeclares()
+	{
+		var id = PackageId.Parse("tester/demo");
+		var windowsOnly = new SetupNote { Message = "install driver", Platforms = ["win"] };
+		Assert.That(SetupRunner.Plan([(id, windowsOnly)], projectRoot, "win-x64"), Has.Count.EqualTo(1));
+		Assert.That(SetupRunner.Plan([(id, windowsOnly)], projectRoot, "linux-x64"), Is.Empty);
+		// No platforms declared means it applies everywhere.
+		var anywhere = new SetupNote { Message = "do a thing" };
+		Assert.That(SetupRunner.Plan([(id, anywhere)], projectRoot, "linux-x64"), Has.Count.EqualTo(1));
+	}
+
+	/// <summary>Nothing runs without a confirmation, which is what separates this from an install hook.</summary>
+	[Test]
+	public async Task NothingRunsWhenTheStepIsDeclined()
+	{
+		var id = PackageId.Parse("tester/demo");
+		var directory = Installer.PackageDirectory(projectRoot, id);
+		_ = Directory.CreateDirectory(directory);
+		var script = Path.Combine(directory, "setup.cmd");
+		await File.WriteAllTextAsync(script, "@echo should not run\n");
+		var step = SetupRunner.Plan([(id, new SetupNote { Message = "x", Script = "setup.cmd" })],
+									projectRoot, Platforms.Any).Single();
+		Assert.That(step.ScriptPath, Is.Not.Null);
+		Assert.That(await SetupRunner.RunAsync(step, _ => false), Is.False);
+	}
+
+	[Test]
+	public void AStepWhosePackageShipsNoScriptIsStillReported()
+	{
+		var id = PackageId.Parse("tester/demo");
+		var step = SetupRunner.Plan([(id, new SetupNote { Message = "install it yourself", Script = "absent.exe" })],
+									projectRoot, Platforms.Any).Single();
+		// Reported so the user sees the instructions, but with nothing to run.
+		Assert.That(step.ScriptPath, Is.Null);
+		Assert.That(step.Note.IsRunnable, Is.True);
+	}
+
 	[Test]
 	public async Task APackageWithoutASetupStepReportsNone()
 	{
