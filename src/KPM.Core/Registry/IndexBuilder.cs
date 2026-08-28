@@ -10,6 +10,8 @@ public sealed class CatalogEntry
 	public string Id { get; set; } = "";
 	public string Name { get; set; } = "";
 	public string Owner { get; set; } = "";
+	public List<string> Authors { get; set; } = [];
+	public string? DerivedFrom { get; set; }
 	public string? DisplayName { get; set; }
 	public string Description { get; set; } = "";
 	public string Version { get; set; } = "";
@@ -65,6 +67,8 @@ public static class IndexBuilder
 				Id = $"{package.Package.Owner}/{package.Package.Name}",
 				Name = package.Package.Name,
 				Owner = package.Package.Owner,
+				Authors = package.Package.Authors,
+				DerivedFrom = package.Package.DerivedFrom,
 				DisplayName = package.Package.DisplayName,
 				Description = package.Package.Description,
 				Version = newest.Version,

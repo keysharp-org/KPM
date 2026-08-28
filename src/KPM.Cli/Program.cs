@@ -282,6 +282,16 @@ static async Task<int> Search(CommandLine cli)
 		var platforms = string.Join(", ", newest.Platforms);
 		Console.WriteLine($"{match.Package.Owner}/{match.Package.Name}  {newest.Version}");
 		Console.WriteLine($"    {match.Package.Description}");
+
+		// Shown next to the id, because the id names the maintainer and people read it as the author.
+		if (match.Package.Authors.Count > 0)
+		{
+			var by = $"    by {string.Join(", ", match.Package.Authors)}";
+			Console.WriteLine(match.Package.DerivedFrom is { } from
+							  ? $"{by}; packaged by {match.Package.Owner}, derived from {from}"
+							  : by);
+		}
+
 		Console.WriteLine($"    engines: {engines}   platforms: {platforms}");
 	}
 

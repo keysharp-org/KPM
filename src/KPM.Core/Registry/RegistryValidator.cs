@@ -82,6 +82,20 @@ public static class RegistryValidator
 		if (string.IsNullOrWhiteSpace(manifest.Description))
 			problems.Add(new ValidationProblem(where, "description is empty"));
 
+		if (manifest.DerivedFrom is { } derived)
+		{
+			if (!PackageId.TryParse(derived, out var derivedId, out var derivedError))
+				problems.Add(new ValidationProblem(where, $"derivedFrom '{derived}': {derivedError}"));
+			else if (derivedId.Value == id.Value)
+				problems.Add(new ValidationProblem(where, "derivedFrom names this package itself"));
+			// A port exists precisely because it is somebody else's work, so it has to say whose.
+			else if (manifest.Authors.Count == 0)
+				problems.Add(new ValidationProblem(where,
+												   $"is derived from '{derived}' but lists no authors; "
+												   + "a port is maintained by its packager and written by someone else, "
+												   + "so the original author must be credited"));
+		}
+
 		foreach (var yanked in manifest.Yanked)
 		{
 			if (!PackageVersion.TryParse(yanked, out _, out var error))

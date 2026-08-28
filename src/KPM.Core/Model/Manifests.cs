@@ -11,7 +11,27 @@ public sealed class PackageManifest
 {
 	public int Schema { get; set; } = 1;
 	public string Name { get; set; } = "";
+
+	/// <summary>
+	/// The namespace that owns this entry and maintains it here — not necessarily who wrote the
+	/// code. A port is maintained by whoever ported it while remaining someone else's work, so
+	/// credit lives in <see cref="Authors"/> and the relationship in <see cref="DerivedFrom"/>.
+	/// </summary>
 	public string Owner { get; set; } = "";
+
+	/// <summary>
+	/// Who wrote the code, when that is not the owner. Left empty when the owner is the author,
+	/// which is the ordinary case; a port must set it, because the owner is then only the packager.
+	/// </summary>
+	public List<string> Authors { get; set; } = [];
+
+	/// <summary>
+	/// The registry id this package is a port or fork of, e.g. <c>feiyue/FindText</c> for a Keysharp
+	/// port of it. Makes the pair discoverable in both directions and keeps a derived package from
+	/// reading as an original.
+	/// </summary>
+	public string? DerivedFrom { get; set; }
+
 	public string? DisplayName { get; set; }
 	public string Description { get; set; } = "";
 	public string? License { get; set; }
