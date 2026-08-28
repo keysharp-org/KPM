@@ -30,6 +30,17 @@ public static class RegistryValidator
 
 	public const int MaxName = 64;
 
+	/// <summary>
+	/// The repository whose releases host this registry's own copy of every artifact. Overridable so
+	/// a fork or a test registry can validate against its own releases.
+	/// </summary>
+	public static string ArtifactRepository { get; set; } = "keysharp-org/Packages";
+
+	/// <summary>Where this registry's own copy of an artifact lives — derived, never invented.</summary>
+	private static string CanonicalSource(PackageId id, VersionManifest version, string platform) =>
+		RegistryTree.ReleaseAssetUrl(ArtifactRepository, id, $"{version.Version}-r{version.Revision}",
+									 $"{version.Name}-{version.Version}-r{version.Revision}-{platform}.kspkg");
+
 	public static async Task<List<ValidationProblem>> ValidateAsync(string registryRoot, CancellationToken ct = default)
 	{
 		var packages = await RegistryTree.ReadAsync(registryRoot, ct);
@@ -189,11 +200,23 @@ public static class RegistryValidator
 				yield return new ValidationProblem(where, $"artifact '{platform}' has no size");
 
 			// A release whose sources were emptied resolves and then fails to install, which is a
-			// worse failure than not resolving at all. Merge-time CI always adds the registry's own
-			// URL, so an empty list here means one was removed.
+			// worse failure than not resolving at all.
 			if (artifact.Sources.Count == 0)
+			{
 				yield return new ValidationProblem(where,
 												   $"artifact '{platform}' lists no sources, so nothing could download it");
+			}
+			// The registry's own copy is where an install should come from, and its URL is fully
+			// determined by the release tag and asset name — so it belongs in the manifest from the
+			// moment it is written. Requiring it here is what lets a published manifest stay
+			// genuinely immutable: nothing has to come back afterwards and edit in a URL.
+			else if (!artifact.Sources.Contains(CanonicalSource(id, version, platform), StringComparer.OrdinalIgnoreCase))
+			{
+				yield return new ValidationProblem(where,
+												   $"artifact '{platform}' does not list this registry's own copy as a source. "
+												   + $"Expected {CanonicalSource(id, version, platform)} — "
+												   + "'kpm manifest' writes it for you.");
+			}
 
 			if (!version.Platforms.Contains(platform))
 				yield return new ValidationProblem(where, $"artifact '{platform}' is not listed in platforms");
