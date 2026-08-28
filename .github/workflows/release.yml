@@ -60,15 +60,21 @@ jobs:
       - name: Archive
         run: |
           mkdir -p dist
-          archive() {
-            cp README.md LICENSE "$1/" 2>/dev/null || true
-            case "${{ matrix.rid }}" in
-            win-*) (cd "$1" && zip -qr "$OLDPWD/dist/$2.zip" .) ;;
-            *)     tar -czf "dist/$2.tar.gz" -C "$1" . ;;
-            esac
-          }
-          archive "publish/standalone" "kpm-${GITHUB_REF_NAME}-${{ matrix.rid }}"
-          archive "publish/framework-dependent" "kpm-${GITHUB_REF_NAME}-${{ matrix.rid }}-framework-dependent"
+          cp README.md LICENSE publish/standalone/ 2>/dev/null || true
+          cp README.md LICENSE publish/framework-dependent/ 2>/dev/null || true
+
+          # The standalone build follows each platform's convention, since a person extracts it.
+          case "${{ matrix.rid }}" in
+          win-*) (cd publish/standalone && zip -qr "$OLDPWD/dist/kpm-${GITHUB_REF_NAME}-${{ matrix.rid }}.zip" .) ;;
+          *)     tar -czf "dist/kpm-${GITHUB_REF_NAME}-${{ matrix.rid }}.tar.gz" -C publish/standalone . ;;
+          esac
+
+          # The framework-dependent build is always a zip, on every platform, because what unpacks it
+          # is MSBuild's Unzip task in a host's packaging - and that task reads zip and nothing else.
+          # It is consumed by a build, not by a person, so the platform convention is not the one
+          # that matters.
+          (cd publish/framework-dependent \
+            && zip -qr "$OLDPWD/dist/kpm-${GITHUB_REF_NAME}-${{ matrix.rid }}-framework-dependent.zip" .)
           ls -la dist
 
       - uses: actions/upload-artifact@v4
@@ -111,7 +117,7 @@ jobs:
           `kpm-<version>-<platform>` is self-contained and needs no .NET installation — that is the
           one to take unless you know otherwise.
 
-          `…-framework-dependent` is the same tool at 465 KB, relying on a .NET runtime already on
+          `…-framework-dependent.zip` is the same tool at 465 KB, relying on a .NET runtime already on
           the machine. It exists for shipping alongside something that provides one, such as
           Keysharp; installing a second copy of the runtime there would dwarf the host.
 
