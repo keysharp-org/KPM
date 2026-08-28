@@ -1,0 +1,74 @@
+name: CI
+
+# Runs on every push and pull request. The registry's workflows build this repository to validate
+# submissions, so a break here becomes a break in everything the registry can accept.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      # All three, because the pieces most likely to break are the platform-dependent ones: path
+      # handling, the deterministic packer, and the line endings its hashes depend on.
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build
+        run: dotnet build KPM.slnx -c Release
+
+      - name: Test
+        run: dotnet test KPM.slnx -c Release --no-build
+
+      # The registry re-packs a submission and requires the hash to reproduce, so the same source
+      # must pack identically on every platform. The unit tests prove packing is stable within one
+      # platform; only comparing across them proves the container carries nothing host-specific —
+      # which it did once, when ZipArchive stamped each entry with the host OS.
+      - name: Pack a fixture
+        shell: bash
+        run: |
+          dotnet publish src/KPM.Cli/KPM.Cli.csproj -c Release -o "$RUNNER_TEMP/kpm"
+          mkdir -p "$RUNNER_TEMP/pkg/src"
+          printf '; fixture\nDemo() {\n}\n' > "$RUNNER_TEMP/pkg/src/Demo.ks"
+          printf '%s\n' '{ "schema": 1, "name": "Fixture", "owner": "Test", "description": "packing fixture", "license": "MIT", "versioning": "registry", "yanked": [] }' > "$RUNNER_TEMP/pkg/package.json"
+          printf '%s\n' '{ "schema": 1, "version": "1.0.0", "entry": "src/Demo.ks", "engines": { "keysharp": ">=0.0.0.17" }, "platforms": ["any"] }' > "$RUNNER_TEMP/pkg/port.json"
+          "$RUNNER_TEMP/kpm/kpm" pack "$RUNNER_TEMP/pkg" --out "$RUNNER_TEMP/out" > "$RUNNER_TEMP/packed.txt"
+          cat "$RUNNER_TEMP/packed.txt"
+          grep -o 'sha256 [0-9a-f]*' "$RUNNER_TEMP/packed.txt" | cut -d' ' -f2 > "$RUNNER_TEMP/hash"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pack-hash-${{ matrix.os }}
+          path: ${{ runner.temp }}/hash
+
+  reproducible:
+    name: Packing is byte-identical across platforms
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pack-hash-*
+          path: hashes
+
+      - name: Compare
+        run: |
+          echo "packed hashes:"
+          for f in hashes/*/hash; do echo "  $(cat "$f")  from $(basename "$(dirname "$f")")"; done
+          count=$(cat hashes/*/hash | sort -u | wc -l)
+          if [ "$count" -ne 1 ]; then
+            echo "::error::the same source packed to $count different hashes; an artifact built on one platform would fail verification on another"
+            exit 1
+          fi
+          echo "identical on every platform"

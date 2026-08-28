@@ -1,0 +1,108 @@
+name: Release
+
+# Builds the binaries a user actually downloads, on a version tag.
+#
+# Self-contained on purpose: the audience writes .ks and .ahk scripts and mostly has no .NET SDK, so
+# needing one to install a package manager would exclude most of them. Not trimmed, because the
+# manifests are deserialized reflectively and trimming would remove the very types that reads.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build, e.g. v0.1.0 (a dry run; publishes nothing)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.rid }}
+    strategy:
+      fail-fast: false
+      # The platforms Keysharp itself ships for, and the same identifiers the registry uses for its
+      # own artifacts, so there is one vocabulary rather than two.
+      matrix:
+        include:
+          - rid: win-x64
+          - rid: win-arm64
+          - rid: linux-x64
+          - rid: linux-arm64
+          - rid: osx-x64
+          - rid: osx-arm64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish
+        run: |
+          # Debug symbols and the XML doc file are build outputs, not things a user downloads.
+          dotnet publish src/KPM.Cli/KPM.Cli.csproj \
+            -c Release -r "${{ matrix.rid }}" --self-contained true \
+            -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true \
+            -p:DebugType=none -p:GenerateDocumentationFile=false \
+            -p:Version="${GITHUB_REF_NAME#v}" \
+            -o "publish/${{ matrix.rid }}"
+          rm -f "publish/${{ matrix.rid }}"/*.pdb "publish/${{ matrix.rid }}"/*.xml
+
+      - name: Archive
+        run: |
+          mkdir -p dist
+          cp README.md LICENSE "publish/${{ matrix.rid }}/" 2>/dev/null || true
+          case "${{ matrix.rid }}" in
+          win-*) (cd "publish/${{ matrix.rid }}" && zip -qr "../../dist/kpm-${GITHUB_REF_NAME}-${{ matrix.rid }}.zip" .) ;;
+          *)     tar -czf "dist/kpm-${GITHUB_REF_NAME}-${{ matrix.rid }}.tar.gz" -C "publish/${{ matrix.rid }}" . ;;
+          esac
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kpm-${{ matrix.rid }}
+          path: dist/*
+
+  release:
+    name: Publish the release
+    needs: build
+    # Only a real tag publishes; the dispatch form exists to prove the build works first.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: kpm-*
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum ./* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<'NOTES'
+          Self-contained `kpm` binaries — no .NET installation required.
+
+          Download the archive for your platform, extract it, and put `kpm` on your PATH:
+
+          ```
+          kpm add Keysharp/FindText
+          ```
+
+          Verify a download against `SHA256SUMS`. Packages install from
+          [keysharp-org/Packages](https://github.com/keysharp-org/Packages).
+          NOTES
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "kpm $GITHUB_REF_NAME" \
+            --notes-file notes.md
