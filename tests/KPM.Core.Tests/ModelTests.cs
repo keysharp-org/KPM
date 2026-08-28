@@ -6,31 +6,49 @@ namespace Kpm.Tests;
 [TestFixture]
 public sealed class PackageIdTests
 {
+	[TestCase("Descolada/OCR")]
 	[TestCase("descolada/findtext")]
 	[TestCase("a/b")]
-	[TestCase("some-owner/some-package-2")]
+	[TestCase("0w0Demonic/AquaHotkey")]
+	[TestCase("thqby/child_process")]
+	[TestCase("some-owner/some.package-2")]
 	public void ValidIdsParse(string text)
 	{
 		Assert.That(PackageId.TryParse(text, out var id, out _), Is.True);
+		// The author's own casing survives: these are people's names.
 		Assert.That(id!.Value.ToString(), Is.EqualTo(text));
 	}
 
-	// Uppercase is rejected rather than lowercased: two ids differing only by case would collide on
-	// a case-insensitive filesystem, and silently rewriting what the user typed hides that.
-	[TestCase("Descolada/FindText", TestName = "uppercase")]
 	[TestCase("findtext", TestName = "no owner")]
 	[TestCase("a/b/c", TestName = "two slashes")]
 	[TestCase("-lead/x", TestName = "leading hyphen")]
 	[TestCase("trail-/x", TestName = "trailing hyphen")]
-	[TestCase("under_score/x", TestName = "underscore")]
+	[TestCase("_lead/x", TestName = "leading underscore")]
 	[TestCase("a/b c", TestName = "space")]
+	[TestCase("a/b:c", TestName = "colon")]
 	[TestCase("", TestName = "empty")]
 	public void InvalidIdsAreRejected(string text) =>
 		Assert.That(PackageId.TryParse(text, out _, out _), Is.False);
 
+	/// <summary>
+	/// Casing is kept for display but never for comparison: two ids differing only by case would be
+	/// one directory on Windows and macOS, so they have to be the same id everywhere else.
+	/// </summary>
 	[Test]
-	public void TheRegistryPathIsAlwaysForwardSlashed() =>
-		Assert.That(PackageId.Parse("a/b").RegistryPath, Is.EqualTo("packages/a/b"));
+	public void IdsCompareWithoutRegardToCase()
+	{
+		var canonical = PackageId.Parse("Descolada/OCR");
+		var typed = PackageId.Parse("descolada/ocr");
+		Assert.That(typed, Is.EqualTo(canonical));
+		Assert.That(typed.GetHashCode(), Is.EqualTo(canonical.GetHashCode()));
+		Assert.That(canonical.ToComparisonKey(), Is.EqualTo("descolada/ocr"));
+		// ...while each keeps the spelling it was given.
+		Assert.That(canonical.ToString(), Is.EqualTo("Descolada/OCR"));
+	}
+
+	[Test]
+	public void TheRegistryPathIsAlwaysForwardSlashedAndKeepsItsCasing() =>
+		Assert.That(PackageId.Parse("Descolada/OCR").RegistryPath, Is.EqualTo("packages/Descolada/OCR"));
 }
 
 [TestFixture]

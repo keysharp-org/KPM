@@ -89,12 +89,10 @@ static async Task<int> Add(CommandLine cli)
 		var at = request.LastIndexOf('@');
 		var idText = at > 0 ? request[..at] : request;
 		var range = at > 0 ? request[(at + 1)..] : null;
+		var id = await ResolveIdAsync(service, idText);
 
-		if (!PackageId.TryParse(idText, out var id, out var error))
-		{
-			Console.Error.WriteLine($"error: {error}");
+		if (id is null)
 			return 1;
-		}
 
 		// Without an explicit range, pin the caret range of whatever is newest now: a bare add
 		// should not mean "always newest", which would change what a project builds over time.
@@ -105,6 +103,46 @@ static async Task<int> Add(CommandLine cli)
 
 	await project.SaveManifestAsync();
 	return await Resolve(project, service, cli);
+}
+
+/// <summary>
+/// Turns what the user typed into a package id. A bare name is accepted when exactly one package
+/// has it, and reported with the candidates when several do; a full id is matched regardless of
+/// casing, and the registry's own spelling is what gets written to kpm.json.
+/// </summary>
+static async Task<PackageId?> ResolveIdAsync(KpmService service, string text)
+{
+	var index = (await service.GetIndexAsync()).Index;
+
+	if (!text.Contains('/'))
+	{
+		var byName = index.FindByName(text);
+
+		if (byName is null)
+		{
+			Console.Error.WriteLine($"error: no package named '{text}' in the registry");
+			return null;
+		}
+
+		return PackageId.Parse($"{byName.Package.Owner}/{byName.Package.Name}");
+	}
+
+	if (!PackageId.TryParse(text, out var parsed, out var error))
+	{
+		Console.Error.WriteLine($"error: {error}");
+		return null;
+	}
+
+	var found = index.Find(parsed.Value);
+
+	if (found is null)
+	{
+		Console.Error.WriteLine($"error: no package '{parsed}' in the registry");
+		return null;
+	}
+
+	// Record the registry's spelling, not the user's: ids keep their author's casing.
+	return PackageId.Parse($"{found.Package.Owner}/{found.Package.Name}");
 }
 
 static async Task<string> CaretRangeForLatest(KpmService service, PackageId id, ResolveContext context)

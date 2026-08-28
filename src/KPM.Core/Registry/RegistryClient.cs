@@ -8,12 +8,15 @@ namespace Kpm.Registry;
 public sealed record RegistrySource(string Name, IReadOnlyList<string> BaseUrls)
 {
 	/// <summary>
-	/// The default registry. The custom domain is first so the registry can move hosts without a
-	/// client update; the repository URL is a fallback for the case where only DNS or Pages is down.
+	/// The default registry, with the raw branch as a fallback for when Pages is down but git is not.
+	///
+	/// Moving this later costs only a client release: the index host is client configuration, and is
+	/// never written into a lockfile — those pin artifact URLs and hashes. That is why starting on
+	/// github.io does not tie the registry to GitHub the way a pinned artifact host would.
 	/// </summary>
 	public static RegistrySource Default { get; set; } = new("keysharp",
 	[
-		"https://packages.keysharp.org",
+		"https://keysharp-org.github.io/Packages",
 		"https://raw.githubusercontent.com/keysharp-org/Packages/gh-pages"
 	]);
 }

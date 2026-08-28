@@ -27,8 +27,25 @@ public static class RegistryValidator
 		foreach (var package in packages)
 			problems.AddRange(ValidatePackage(package));
 
+		problems.AddRange(ValidateCaseUniqueness(packages));
 		problems.AddRange(ValidateDependencies(packages));
 		return problems;
+	}
+
+	/// <summary>
+	/// Two ids differing only by case are one directory on Windows and macOS, so the registry must
+	/// never hold both. This is the check that makes case-preserving ids safe.
+	/// </summary>
+	private static IEnumerable<ValidationProblem> ValidateCaseUniqueness(List<RegistryPackage> packages)
+	{
+		foreach (var collision in packages
+				 .GroupBy(p => p.Id.ToComparisonKey(), StringComparer.Ordinal)
+				 .Where(g => g.Count() > 1))
+		{
+			yield return new ValidationProblem(collision.Key,
+											   "several packages differ only by case, which cannot exist side by side "
+											   + $"on a case-insensitive filesystem: {string.Join(", ", collision.Select(p => p.Id))}");
+		}
 	}
 
 	public static List<ValidationProblem> ValidatePackage(RegistryPackage package)
@@ -45,13 +62,19 @@ public static class RegistryValidator
 
 		where = id.Value.ToString();
 
-		// The directory path is the identity, so a manifest that disagrees with it would make the
-		// same package reachable under two names.
-		var expected = Path.Combine(RegistryTree.PackagesDirectory, id.Value.Owner, id.Value.Name)
-					   .Replace('\\', '/');
+		// The directory path is the identity, casing included, so a manifest that disagrees with it
+		// would make the same package reachable under two names — and on a case-insensitive
+		// filesystem the mismatch would go unnoticed until someone cloned it on Linux.
+		var actualName = Path.GetFileName(package.Directory);
+		var actualOwner = Path.GetFileName(Path.GetDirectoryName(package.Directory)!);
 
-		if (!package.Directory.Replace('\\', '/').EndsWith(expected, StringComparison.Ordinal))
-			problems.Add(new ValidationProblem(where, $"manifest says '{id}' but it lives in {package.Directory}"));
+		if (!string.Equals(actualOwner, id.Value.Owner, StringComparison.Ordinal)
+			|| !string.Equals(actualName, id.Value.Name, StringComparison.Ordinal))
+		{
+			problems.Add(new ValidationProblem(where,
+											   $"manifest says '{id}' but the directory is '{actualOwner}/{actualName}'; "
+											   + "the path and the manifest must agree exactly, including case"));
+		}
 
 		if (!VersioningKind.IsValid(manifest.Versioning))
 			problems.Add(new ValidationProblem(where, $"versioning must be 'upstream' or 'registry', not '{manifest.Versioning}'"));

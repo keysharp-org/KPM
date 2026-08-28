@@ -15,10 +15,37 @@ public sealed class RegistryIndex
 
 	private Dictionary<string, IndexedPackage>? lookup;
 
+	/// <summary>
+	/// Finds a package by id, ignoring case. Ids keep their author's casing, but nobody should have
+	/// to reproduce it to install something.
+	/// </summary>
 	public IndexedPackage? Find(PackageId id)
 	{
-		lookup ??= Packages.ToDictionary(p => $"{p.Package.Owner}/{p.Package.Name}", StringComparer.Ordinal);
-		return lookup.GetValueOrDefault(id.ToString());
+		lookup ??= Packages
+				   .GroupBy(p => $"{p.Package.Owner}/{p.Package.Name}".ToLowerInvariant(), StringComparer.Ordinal)
+				   .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+		return lookup.GetValueOrDefault(id.ToComparisonKey());
+	}
+
+	/// <summary>
+	/// Resolves a bare package name, for the convenience form <c>kpm add findtext</c>. Returns null
+	/// when nothing matches and throws when several do: guessing between two packages that share a
+	/// name is exactly the mistake a namespaced registry exists to prevent.
+	/// </summary>
+	public IndexedPackage? FindByName(string name)
+	{
+		var matches = Packages
+					  .Where(p => string.Equals(p.Package.Name, name, StringComparison.OrdinalIgnoreCase))
+					  .ToList();
+
+		if (matches.Count > 1)
+		{
+			var candidates = matches.Select(m => $"{m.Package.Owner}/{m.Package.Name}").OrderBy(c => c, StringComparer.Ordinal);
+			throw new InvalidOperationException(
+				$"'{name}' is ambiguous; name the owner: {string.Join(", ", candidates)}");
+		}
+
+		return matches.Count == 1 ? matches[0] : null;
 	}
 
 	/// <summary>Every package whose id or description mentions <paramref name="text"/>.</summary>

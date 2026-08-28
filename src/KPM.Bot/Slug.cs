@@ -5,10 +5,11 @@ namespace Kpm.Bot;
 /// <summary>
 /// Turns an upstream name into a registry identifier.
 ///
-/// Upstream names are GitHub handles and forum nicknames — mixed case, occasional underscores and
-/// dots — while registry ids are lowercase and hyphenated so two ids cannot collide on a
-/// case-insensitive filesystem. The mapping is pure and stable: re-running an import must produce
-/// the same ids, or every package would move.
+/// The author's own casing and punctuation are kept — <c>Descolada/OCR</c>, <c>thqby/child_process</c>
+/// — because these are people's names and their libraries' names. Only characters an id cannot hold
+/// are rewritten, which in this corpus means the spaces in a few forum handles ("Komrad Toast").
+/// The mapping is pure and stable: re-running an import must produce the same ids, or every package
+/// would move.
 /// </summary>
 public static class Slug
 {
@@ -18,14 +19,16 @@ public static class Slug
 
 		foreach (var c in text)
 		{
-			if (char.IsAsciiLetterOrDigit(c))
-				builder.Append(char.ToLowerInvariant(c));
+			if (char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.')
+				builder.Append(c);
 			else if (builder.Length > 0 && builder[^1] != '-')
 				builder.Append('-');   // any other run of punctuation becomes a single separator
 		}
 
-		var result = builder.ToString().Trim('-');
-		return result.Length > 64 ? result[..64].Trim('-') : result;
+		// A segment must begin and end alphanumeric, so trim any punctuation the rewrite left at
+		// either end rather than producing an id that fails validation.
+		var result = builder.ToString().Trim('-', '_', '.');
+		return result.Length > 64 ? result[..64].Trim('-', '_', '.') : result;
 	}
 
 	/// <summary>Maps an Aris <c>Owner/Name</c> key to a registry id, or explains why it cannot.</summary>
