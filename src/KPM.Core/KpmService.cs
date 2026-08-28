@@ -30,7 +30,9 @@ public sealed class KpmService(RegistryClient? registry = null, ArtifactStore? s
 		var installed = await new Installer(store).InstallAsync(resolution, project.Directory, ct);
 		await project.SaveLockAsync(ToLockFile(resolution), ct);
 		var warnings = new List<string?> { fetch.Warning, DescribeNameCollisions(resolution) };
-		return new InstallReport(installed, resolution, string.Join("\n", warnings.Where(w => w is not null)) is { Length: > 0 } text ? text : null);
+		return new InstallReport(installed, resolution,
+								 string.Join("\n", warnings.Where(w => w is not null)) is { Length: > 0 } text ? text : null,
+								 CollectSetupNotes(resolution));
 	}
 
 	/// <summary>
@@ -65,6 +67,16 @@ public sealed class KpmService(RegistryClient? registry = null, ArtifactStore? s
 						 .ToList();
 		return collisions.Count > 0 ? string.Join("\n", collisions) : null;
 	}
+
+	/// <summary>
+	/// The manual steps the installed packages declare. Surfaced after installing, because a package
+	/// needing a driver looks identical to one that works until the moment it fails.
+	/// </summary>
+	private static IReadOnlyList<(PackageId, SetupNote)> CollectSetupNotes(DependencyResolution resolution) =>
+		resolution.Packages
+		.Where(p => p.Manifest.Setup is not null)
+		.Select(p => (p.Id, p.Manifest.Setup!))
+		.ToList();
 
 	public static LockFile ToLockFile(DependencyResolution resolution) => new()
 	{
@@ -111,4 +123,5 @@ public sealed class KpmService(RegistryClient? registry = null, ArtifactStore? s
 	}
 }
 
-public sealed record InstallReport(IReadOnlyList<InstalledPackage> Installed, DependencyResolution? Resolution, string? Warning);
+public sealed record InstallReport(IReadOnlyList<InstalledPackage> Installed, DependencyResolution? Resolution,
+								   string? Warning, IReadOnlyList<(PackageId Id, SetupNote Note)>? Setup = null);

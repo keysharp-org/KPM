@@ -74,6 +74,12 @@ public sealed class VersionManifest
 	/// <summary>Package id to SemVer range (<c>^1.4.0</c>).</summary>
 	public Dictionary<string, string> Dependencies { get; set; } = [];
 
+	/// <summary>
+	/// Something the user must do themselves before the package works — install a driver, obtain a
+	/// tool. KPM prints it and never acts on it.
+	/// </summary>
+	public SetupNote? Setup { get; set; }
+
 	public SourceRef? Source { get; set; }
 
 	/// <summary>Platform (see <see cref="Model.Platforms"/>) to the artifact built for it.</summary>
@@ -92,6 +98,28 @@ public static class Engines
 	public const string AutoHotkey = "autohotkey";
 
 	public static bool IsValid(string? s) => s is Keysharp or AutoHotkey;
+}
+
+/// <summary>
+/// A manual step a package needs, shown to the user after installing.
+///
+/// Deliberately inert data rather than a script. A package manager that runs code at install time
+/// is the single most exploited position in a software supply chain, and this registry serves a
+/// bot-imported corpus whose CI checks that code compiles, not what it does. The steps that
+/// genuinely cannot be automated — installing a driver, anything needing administrator rights —
+/// require the user to approve an elevation prompt regardless, so executing here would buy almost
+/// no convenience in exchange for that exposure.
+/// </summary>
+public sealed class SetupNote
+{
+	/// <summary>What the user has to do, in plain language.</summary>
+	public string Message { get; set; } = "";
+
+	/// <summary>Where the instructions live.</summary>
+	public string? Url { get; set; }
+
+	/// <summary>An archive-relative path the user may run themselves, if the package ships one.</summary>
+	public string? Script { get; set; }
 }
 
 /// <summary>Where a release's content came from — provenance, not a download location.</summary>
@@ -134,6 +162,7 @@ public sealed class PortManifest
 	public List<string> Platforms { get; set; } = [Model.Platforms.Any];
 	public List<string> Capabilities { get; set; } = [];
 	public Dictionary<string, string> Dependencies { get; set; } = [];
+	public SetupNote? Setup { get; set; }
 	public SourceRef? Upstream { get; set; }
 }
 

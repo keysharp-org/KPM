@@ -94,6 +94,7 @@ public static class RegistryTree
 			Platforms = [.. port.Platforms],
 			Capabilities = [.. port.Capabilities],
 			Dependencies = new Dictionary<string, string>(port.Dependencies),
+			Setup = port.Setup,
 			Source = new SourceRef
 			{
 				Kind = "ports",

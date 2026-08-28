@@ -207,6 +207,41 @@ public sealed class EndToEndTests
 		Assert.That(Directory.Exists(Path.Combine(projectRoot, "Lib")), Is.False);
 	}
 
+	/// <summary>
+	/// A package needing a driver looks identical to one that works, right up until it fails, so the
+	/// note has to reach the user. kpm reports it and never acts on it.
+	/// </summary>
+	[Test]
+	public async Task AManualSetupStepIsReportedAfterInstalling()
+	{
+		var release = Publish("tester", "needsdriver", "1.0.0");
+		release.Setup = new SetupNote
+		{
+			Message = "Requires the Interception driver, installed separately with administrator rights.",
+			Url = "https://example/install",
+			Script = "src/install.exe"
+		};
+		WriteIndex(release);
+		var project = await Project.LoadAsync(projectRoot);
+		project.SetDependency(PackageId.Parse("tester/needsdriver"), "^1.0");
+		await project.SaveManifestAsync();
+		var report = await Service().UpdateAsync(project, Context());
+		Assert.That(report.Setup, Has.Count.EqualTo(1));
+		Assert.That(report.Setup![0].Note.Message, Does.Contain("Interception driver"));
+		Assert.That(report.Setup[0].Id.ToString(), Is.EqualTo("tester/needsdriver"));
+	}
+
+	[Test]
+	public async Task APackageWithoutASetupStepReportsNone()
+	{
+		WriteIndex(Publish("tester", "plain", "1.0.0"));
+		var project = await Project.LoadAsync(projectRoot);
+		project.SetDependency(PackageId.Parse("tester/plain"), "^1.0");
+		await project.SaveManifestAsync();
+		var report = await Service().UpdateAsync(project, Context());
+		Assert.That(report.Setup, Is.Empty);
+	}
+
 	[Test]
 	public async Task TransitiveDependenciesAreInstalledToo()
 	{

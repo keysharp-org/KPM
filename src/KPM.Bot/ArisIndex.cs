@@ -30,6 +30,13 @@ public sealed class ArisEntry
 	public string? Homepage { get; set; }
 	public Dictionary<string, string> Dependencies { get; set; } = [];
 
+	/// <summary>
+	/// Lifecycle commands the source package manager runs around install. This registry never runs
+	/// them, but their presence is recorded: a package that needed a setup step still needs it, and
+	/// dropping that silently would leave a user with files that do not work and no explanation.
+	/// </summary>
+	public Dictionary<string, string> Scripts { get; set; } = [];
+
 	/// <summary>ScriptHub is a mirror of forum posts, not an upstream project of its own.</summary>
 	[JsonIgnore]
 	public bool IsScriptHub =>

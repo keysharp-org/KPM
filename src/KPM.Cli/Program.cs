@@ -228,6 +228,24 @@ static void Report(InstallReport report, Project project)
 		Console.WriteLine($"  {package.Id} {package.Version.ToDisplayString()}  ->  #Include <{package.IncludePath}>");
 
 	Console.WriteLine($"{report.Installed.Count} package(s) installed into {Path.Combine(project.Directory, "Lib", "KPM")}");
+
+	// Printed last so it is the thing still on screen. kpm never performs these itself.
+	if (report.Setup is { Count: > 0 })
+	{
+		Console.WriteLine();
+		Console.WriteLine("These packages need a step kpm does not perform for you:");
+
+		foreach (var (id, note) in report.Setup)
+		{
+			Console.WriteLine($"  {id}: {note.Message}");
+
+			if (note.Script is not null)
+				Console.WriteLine($"    run yourself: {Path.Combine(project.Directory, "Lib", "KPM", id.Owner, id.Name, note.Script)}");
+
+			if (note.Url is not null)
+				Console.WriteLine($"    {note.Url}");
+		}
+	}
 }
 
 static async Task<int> Search(CommandLine cli)

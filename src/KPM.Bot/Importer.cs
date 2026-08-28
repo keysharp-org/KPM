@@ -73,7 +73,10 @@ public sealed class Importer(GitHub github, ImportOptions options)
 		}
 
 		if (!options.DryRun)
+		{
 			await ReconcileDependenciesAsync(progress, ct);
+			await BackfillSetupNotesAsync(entries, progress, ct);
+		}
 
 		return outcomes;
 	}
@@ -81,6 +84,44 @@ public sealed class Importer(GitHub github, ImportOptions options)
 	// Alias so the catch filter above reads as one list; System.Text.Json's exception is the only
 	// other kind a malformed upstream response produces.
 	private sealed class JsonExceptionAlias : System.Text.Json.JsonException;
+
+	/// <summary>
+	/// Adds setup notes to releases imported before the note existed. Idempotent, and it only ever
+	/// fills in a missing note — a note written by hand is never overwritten by a generated one.
+	/// </summary>
+	private async Task BackfillSetupNotesAsync(Dictionary<string, ArisEntry> entries, IProgress<string>? progress,
+											   CancellationToken ct)
+	{
+		var byId = new Dictionary<string, ArisEntry>(StringComparer.OrdinalIgnoreCase);
+
+		foreach (var (key, entry) in entries)
+		{
+			if (entry.Scripts.Count > 0 && Slug.TryMap(key, out var id, out _))
+				byId[id.ToString()] = entry;
+		}
+
+		if (byId.Count == 0)
+			return;
+
+		var updated = 0;
+
+		foreach (var package in await RegistryTree.ReadAsync(options.RegistryRoot, ct))
+		{
+			if (!byId.TryGetValue(package.Id.ToString(), out var entry))
+				continue;
+
+			foreach (var version in package.Versions.Where(v => v.Setup is null))
+			{
+				version.Setup = DescribeSetup(entry);
+				var path = Path.Combine(package.Directory, "versions", $"{version.Version}-r{version.Revision}.json");
+				await ManifestJson.WriteFileAsync(path, version, ct);
+				updated++;
+			}
+		}
+
+		if (updated > 0)
+			progress?.Report($"setup     recorded an upstream setup step on {updated} release(s)");
+	}
 
 	/// <summary>
 	/// Drops dependencies on packages that did not make it into the registry.
@@ -140,7 +181,7 @@ public sealed class Importer(GitHub github, ImportOptions options)
 		var existing = Directory.Exists(directory)
 					   ? await RegistryTree.ReadPackageAsync(directory, ct)
 					   : null;
-		var plan = await PlanVersionsAsync(entry, repository, ct);
+		List<PlannedRelease> plan = await PlanVersionsAsync(entry, repository, ct);
 
 		if (plan.Count == 0)
 			return new ImportOutcome(key, id, 0, "skipped", "no importable revisions found");
@@ -170,6 +211,31 @@ public sealed class Importer(GitHub github, ImportOptions options)
 
 			manifests.Add(built);
 			wrote++;
+		}
+
+		// A repository that restructured after its last tag has an index entry describing the branch
+		// layout and tags whose trees predate it, so every tagged revision looks empty.
+		// AutoHotInterception is the case in point: the index names "AHK v2/Lib/...", which exists
+		// only on master. Falling back to the branch is what the index is actually describing, and
+		// the release is registry-versioned, which correctly says the number is ours and not theirs.
+		if (wrote == 0 && alreadyPresent == 0 && noContent > 0 && plan[0].IsUpstreamVersioned)
+		{
+			var head = await github.GetLatestCommitAsync(repository, entry.RepositoryBranch, ct);
+
+			if (head is not null)
+			{
+				var fromBranch = new PlannedRelease("0.1.0", head.Sha, head.Sha, head.Date, false, null);
+				var built = await BuildReleaseAsync(id, entry, repository, fromBranch, known, ct);
+
+				if (built is not null)
+				{
+					manifests.Add(built);
+					wrote++;
+					plan = [fromBranch];
+					progress?.Report($"branch    {key}: no tagged revision holds the files the index names; "
+									 + $"imported {entry.RepositoryBranch} as 0.1.0");
+				}
+			}
 		}
 
 		if (wrote == 0)
@@ -397,6 +463,7 @@ public sealed class Importer(GitHub github, ImportOptions options)
 				Engines = { [Engines.AutoHotkey] = ">=2.0" },
 				Platforms = [Platforms.Any],
 				Dependencies = dependencies,
+				Setup = DescribeSetup(entry),
 				Source = new SourceRef
 				{
 					Kind = entry.IsScriptHub ? "scripthub" : "git",
@@ -421,6 +488,30 @@ public sealed class Importer(GitHub github, ImportOptions options)
 			if (Directory.Exists(staging))
 				Directory.Delete(staging, recursive: true);
 		}
+	}
+
+	/// <summary>
+	/// Records that an imported package had install-time commands upstream, without carrying the
+	/// commands themselves.
+	///
+	/// Most were packaging fixups — rewriting encodings, generating an aggregator include — which a
+	/// built artifact simply does not need, because the author does them once before packing. What
+	/// cannot be carried over is the rest: one of these downloads a zip, elevates, installs a kernel
+	/// driver and runs PowerShell with the execution policy bypassed. That is exactly the code this
+	/// registry declines to run, so the honest thing is to say so and point at the upstream.
+	/// </summary>
+	private static SetupNote? DescribeSetup(ArisEntry entry)
+	{
+		if (entry.Scripts.Count == 0)
+			return null;
+
+		var phases = string.Join(", ", entry.Scripts.Keys.OrderBy(k => k, StringComparer.Ordinal));
+		return new SetupNote
+		{
+			Message = $"Upstream defines install-time commands ({phases}) that this registry does not run. "
+					  + "If this package needs a driver, a tool, or a setup step, follow its own instructions.",
+			Url = entry.Homepage
+		};
 	}
 
 	private static bool IsGlob(string pattern) => pattern.Contains('*') || pattern.Contains('?');
