@@ -278,16 +278,32 @@ public sealed class Importer(GitHub github, ImportOptions options)
 
 			if (head is not null)
 			{
-				var fromBranch = new PlannedRelease("0.1.0", head.Sha, head.Sha, head.Date, false, null);
-				var built = await BuildReleaseAsync(id, entry, repository, fromBranch, known, ct);
+				// Already imported from this very commit: nothing has changed upstream, so there is
+				// nothing to add. Without this the fallback re-imported on every run and rewrote a
+				// published manifest — identical while the branch sat still, and silently mutating
+				// an immutable release the moment it moved.
+				var current = existing?.Versions.FirstOrDefault(v => v.Source?.Commit == head.Sha);
 
-				if (built is not null)
+				if (current is not null)
 				{
-					manifests.Add(built);
-					wrote++;
-					plan = [fromBranch];
-					progress?.Report($"branch    {key}: no tagged revision holds the files the index names; "
-									 + $"imported {entry.RepositoryBranch} as 0.1.0");
+					alreadyPresent++;
+				}
+				else
+				{
+					// The branch moved (or this is the first import), so this is a new release, not
+					// a revision of the old one: take the next 0.x rather than reusing a number.
+					var version = NextRegistryVersion(existing);
+					var fromBranch = new PlannedRelease(version, head.Sha, head.Sha, head.Date, false, null);
+					var built = await BuildReleaseAsync(id, entry, repository, fromBranch, known, ct);
+
+					if (built is not null)
+					{
+						manifests.Add(built);
+						wrote++;
+						plan = [fromBranch];
+						progress?.Report($"branch    {key}: no tagged revision holds the files the index names; "
+										 + $"imported {entry.RepositoryBranch} as {version}");
+					}
 				}
 			}
 		}
@@ -332,6 +348,22 @@ public sealed class Importer(GitHub github, ImportOptions options)
 
 	private sealed record PlannedRelease(string Version, string Reference, string Commit, DateTimeOffset Date,
 										 bool IsUpstreamVersioned, string? Tag);
+
+	/// <summary>
+	/// The next <c>0.N.0</c> for a package whose versions this registry assigns. Never reuses a
+	/// number that exists: a published release is immutable, so a changed upstream is a new release
+	/// rather than a correction of the last one.
+	/// </summary>
+	private static string NextRegistryVersion(RegistryPackage? existing)
+	{
+		var highest = existing?.Versions
+					  .Select(v => SemVersion.TryParse(v.Version, SemVersionStyles.Strict, out var parsed) ? parsed : null)
+					  .Where(v => v is not null && v.Major == 0)
+					  .Select(v => v!.Minor)
+					  .DefaultIfEmpty(0)
+					  .Max() ?? 0;
+		return $"0.{highest + 1}.0";
+	}
 
 	/// <summary>
 	/// Decides what versions a package gets. A repository that tags its releases keeps its own
