@@ -9,7 +9,20 @@ namespace Kpm.Bot;
 public sealed record ImportOptions
 {
 	public required string RegistryRoot { get; init; }
+
+	/// <summary>How many upstream-tagged releases to keep. These are the author's own numbers.</summary>
 	public int MaxVersions { get; init; } = 10;
+
+	/// <summary>
+	/// How many synthesized <c>0.x</c> releases to keep, newest first.
+	///
+	/// Far fewer than the tagged kind, and deliberately: a registry version is an ordinal this
+	/// importer assigned by commit date, so pinning <c>^0.3</c> of a forum script promises nothing
+	/// its author ever offered. Keeping the current snapshot is the honest amount of history, and
+	/// the numbering is derived from a commit's position in the full history, so keeping fewer never
+	/// renumbers what remains.
+	/// </summary>
+	public int MaxRegistryVersions { get; init; } = 1;
 	public int? Limit { get; init; }
 	public long MaxPackageBytes { get; init; } = 8 * 1024 * 1024;
 	public bool DryRun { get; init; }
@@ -84,6 +97,47 @@ public sealed class Importer(GitHub github, ImportOptions options)
 	// Alias so the catch filter above reads as one list; System.Text.Json's exception is the only
 	// other kind a malformed upstream response produces.
 	private sealed class JsonExceptionAlias : System.Text.Json.JsonException;
+
+	/// <summary>
+	/// Applies <see cref="ImportOptions.MaxRegistryVersions"/> to what is already in the registry,
+	/// dropping the oldest synthesized releases of each package.
+	///
+	/// Only ever touches registry-versioned packages: an upstream tag is the author's own release
+	/// and someone may legitimately depend on it, whereas a synthesized 0.x is an ordinal this
+	/// importer assigned. Safe to run only before publishing — once a release has an artifact and a
+	/// lockfile can name it, removal is a yank, not a delete.
+	/// </summary>
+	public async Task<int> TrimAsync(IProgress<string>? progress = null, CancellationToken ct = default)
+	{
+		var removed = 0;
+
+		foreach (var package in await RegistryTree.ReadAsync(options.RegistryRoot, ct))
+		{
+			if (package.Package.Versioning != VersioningKind.Registry || package.Versions.Count <= options.MaxRegistryVersions)
+				continue;
+
+			var drop = package.Versions
+					   .OrderByDescending(v => v.Release)
+					   .Skip(options.MaxRegistryVersions)
+					   .ToList();
+
+			foreach (var version in drop)
+			{
+				var path = Path.Combine(package.Directory, "versions", $"{version.Version}-r{version.Revision}.json");
+
+				if (!options.DryRun)
+					File.Delete(path);
+
+				removed++;
+			}
+
+			var kept = package.Versions.Except(drop).Select(v => v.Version);
+			progress?.Report($"{(options.DryRun ? "would trim" : "trimmed")} {package.Id}: "
+							 + $"dropped {drop.Count}, kept {string.Join(", ", kept)}");
+		}
+
+		return removed;
+	}
 
 	/// <summary>
 	/// Adds setup notes to releases imported before the note existed. Idempotent, and it only ever
@@ -335,7 +389,7 @@ public sealed class Importer(GitHub github, ImportOptions options)
 		for (var i = 0; i < ordered.Count; i++)
 			planned.Add(new PlannedRelease($"0.{i + 1}.0", ordered[i].Sha, ordered[i].Sha, ordered[i].Date, false, null));
 
-		return planned.TakeLast(options.MaxVersions).ToList();
+		return planned.TakeLast(options.MaxRegistryVersions).ToList();
 	}
 
 	private async Task<VersionManifest?> BuildReleaseAsync(PackageId id, ArisEntry entry, string repository,

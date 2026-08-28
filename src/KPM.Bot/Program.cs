@@ -12,6 +12,7 @@ try
 	{
 		case "import-aris": return await ImportAris(cli);
 		case "publish": return await Publish(cli);
+		case "trim": return await Trim(cli);
 		case "help": case "--help": case "-h": Help(); return 0;
 		default:
 			Console.Error.WriteLine($"error: unknown command '{command}'. Run 'kpm-bot help'.");
@@ -72,6 +73,21 @@ static async Task<int> ImportAris(CommandLine cli)
 			Console.WriteLine($"  {failure.Key}: {failure.Note}");
 	}
 
+	return 0;
+}
+
+static async Task<int> Trim(CommandLine cli)
+{
+	var options = new ImportOptions
+	{
+		RegistryRoot = Path.GetFullPath(cli.ValueOrDefault("registry", Directory.GetCurrentDirectory())),
+		MaxRegistryVersions = int.Parse(cli.ValueOrDefault("registry-versions", "1")),
+		DryRun = cli.Has("dry-run")
+	};
+	using var github = new GitHub(cli.Value("token"));
+	var removed = await new Importer(github, options).TrimAsync(new Progress<string>(Console.WriteLine));
+	Console.WriteLine($"\n{removed} synthesized release(s) {(options.DryRun ? "would be " : "")}removed; "
+					  + "upstream-tagged releases were left alone");
 	return 0;
 }
 
