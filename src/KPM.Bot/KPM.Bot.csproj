@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<RootNamespace>Kpm.Bot</RootNamespace>
+		<AssemblyName>kpm-bot</AssemblyName>
+		<RollForward>LatestMinor</RollForward>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\KPM.Core\KPM.Core.csproj" />
+	</ItemGroup>
+
+</Project>

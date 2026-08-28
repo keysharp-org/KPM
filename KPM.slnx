@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/KPM.Bot/KPM.Bot.csproj" />
+    <Project Path="src/KPM.Cli/KPM.Cli.csproj" />
+    <Project Path="src/KPM.Core/KPM.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/KPM.Core.Tests/KPM.Core.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<RootNamespace>Kpm</RootNamespace>
+		<AssemblyName>KPM.Core</AssemblyName>
+		<GenerateDocumentationFile>true</GenerateDocumentationFile>
+		<!-- Doc comments are for the non-obvious "why" only, so an undocumented public member is not a warning. -->
+		<NoWarn>$(NoWarn);CS1591</NoWarn>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Semver" Version="3.0.0" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- The archive writer and its path rules are internal; their tests are the reason to see them. -->
+		<InternalsVisibleTo Include="KPM.Core.Tests" />
+	</ItemGroup>
+
+</Project>
